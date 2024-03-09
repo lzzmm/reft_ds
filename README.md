@@ -71,6 +71,11 @@ line 123 data_home
 line 153 output_home
 ```
 
+`profiler_context` is in
+```
+/Megatron-DeepSpeed/megatron/training.py line 1169
+```
+
 Then run
 
 ```sh
