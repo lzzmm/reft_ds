@@ -62,12 +62,14 @@ Run Megatron-DeepSpeed
 
 Firstly configure `Megatron-DeepSpeed/examples_deepspeed/bert_with_pile/ds_pretrain_bert_copy.sh`
 
+```
 line 9 global_batch_size
 line 95 batch_size  Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 line 85 / 86 GPU num
 line 104 num_save
 line 123 data_home
 line 153 output_home
+```
 
 Then run
 
