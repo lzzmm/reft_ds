@@ -1,4 +1,22 @@
-ds_report
+# reft_ds
+
+## Troubleshooting
+
+```sh
+ModuleNotFoundError: No module named 'aiofiles'
+ModuleNotFoundError: No module named 'transformers'
+ModuleNotFoundError: No module named 'six'
+ModuleNotFoundError: No module named 'pybind11'
+```
+
+```sh
+pip install aiofiles
+pip install transformers
+pip install six
+pip install pybind11
+```
+
+## ds_report
 
 ```sh
 --------------------------------------------------
@@ -51,14 +69,14 @@ deepspeed wheel compiled w. ...... torch 2.0, cuda 11.7
 shared memory (/dev/shm) size .... 251.53 GB
 ```
 
-Install modified DeepSpeed
+## Install modified DeepSpeed
 
 ```sh
 cd DeepSpeed
 pip install .
 ```
 
-Run Megatron-DeepSpeed
+## Run Megatron-DeepSpeed
 
 Firstly configure `Megatron-DeepSpeed/examples_deepspeed/bert_with_pile/ds_pretrain_bert_copy.sh`
 
@@ -83,3 +101,5 @@ Then run
 ```
 
 Thanks!
+
+
