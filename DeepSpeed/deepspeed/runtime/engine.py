@@ -85,7 +85,7 @@ from deepspeed.runtime.data_pipeline.data_routing.scheduler import RandomLTDSche
 from deepspeed.runtime.data_pipeline.data_routing.helper import remove_random_ltd_state_dict
 from deepspeed.runtime.data_pipeline.data_routing.basic_layer import RandomLayerTokenDrop
 
-from deepspeed.runtime.checkpoint_engine.torch_checkpoint_engine import TorchCheckpointEngine, AsyncCheckpointEngine
+from deepspeed.runtime.checkpoint_engine.torch_checkpoint_engine import TorchCheckpointEngine
 from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
 
 from .pipe.module import PipelineModule
@@ -928,9 +928,8 @@ class DeepSpeedEngine(Module):
         log_dist(f'DeepSpeed LR Scheduler = {self.lr_scheduler}', ranks=[0])
 
     def _configure_checkpointing(self, dist_init_required):
-        # self.checkpoint_engine = TorchCheckpointEngine()
-        self.checkpoint_engine = AsyncCheckpointEngine()
-        
+        self.checkpoint_engine = TorchCheckpointEngine()
+
         if self._config is not None and self._config.nebula_config.enabled:
             try:
                 from deepspeed.runtime.checkpoint_engine.nebula_checkpoint_engine import \
@@ -938,8 +937,7 @@ class DeepSpeedEngine(Module):
                 self.checkpoint_engine = NebulaCheckpointEngine(config_params=self._config.nebula_config)
             except ImportError as err:
                 logger.error(f"No torch_nebula was found! Will fall back to torch.save. Details: {err}")
-                self.checkpoint_engine = AsyncCheckpointEngine()
-                # self.checkpoint_engine = TorchCheckpointEngine()
+                self.checkpoint_engine = TorchCheckpointEngine()
 
         dp_rank = groups._get_sequence_data_parallel_rank()
 
@@ -3215,7 +3213,7 @@ class DeepSpeedEngine(Module):
                     moe_save_path = self._get_expert_ckpt_name(save_dir, moe_layer_id, global_expert_id, tag, self.mpu)
                     if self.random_ltd_enabled():
                         expert_state_dict = remove_random_ltd_state_dict(expert_state_dict)
-                    self.checkpoint_engine.save(expert_state_dict, moe_save_path, f'cuda:{self.mpu.get_data_parallel_rank()}')
+                    self.checkpoint_engine.save(expert_state_dict, moe_save_path)
                 moe_layer_id += 1
 
         self._curr_ckpt_path = os.path.join(save_dir, tag)
@@ -3234,7 +3232,7 @@ class DeepSpeedEngine(Module):
             }
             # TODO: why use BufferedWriter not the path
             file_path = self._get_optimizer_ckpt_name(save_dir, tag, expp_rank)
-            self.checkpoint_engine.save(optimizer_state, file_path, f'cuda:{self.mpu.get_data_parallel_rank()}')
+            self.checkpoint_engine.save(optimizer_state, file_path)
 
         # Load flow uses below saved file for model parameters, RNG and more
         if groups._get_data_parallel_rank() == 0:
@@ -3270,7 +3268,7 @@ class DeepSpeedEngine(Module):
             }
             state.update(client_state)
             logger.info(f'Saving model checkpoint: {save_path}')
-            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}')
+            self.checkpoint_engine.save(state, save_path)
 
     def _create_checkpoint_file(self, save_dir, tag, zero_checkpoint):
         name_function = (self._get_zero_ckpt_name if zero_checkpoint else self._get_ckpt_name)
@@ -3336,7 +3334,7 @@ class DeepSpeedEngine(Module):
 
         if self.save_non_zero_checkpoint:
             log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
-            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}')
+            self.checkpoint_engine.save(state, save_path)
 
     def _get_buffer_names(self):
         buffer_names = []
@@ -3482,7 +3480,7 @@ class DeepSpeedEngine(Module):
     def _save_zero_checkpoint(self, save_path, tag):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
-        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}')
+        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name)
 
         if self.global_rank == 0:
             self._copy_recovery_script(save_path)
@@ -3601,7 +3599,7 @@ class DeepSpeedEngine(Module):
         if dist.get_rank() == 0:
             self.checkpoint_engine.makedirs(save_dir, exist_ok=True)
             logger.info(f"Saving model weights to {path}, tag: {tag}")
-            self.checkpoint_engine.save(state_dict, path, f'cuda:{self.mpu.get_data_parallel_rank()}')
+            self.checkpoint_engine.save(state_dict, path)
 
         self.checkpoint_engine.commit(tag)
 
