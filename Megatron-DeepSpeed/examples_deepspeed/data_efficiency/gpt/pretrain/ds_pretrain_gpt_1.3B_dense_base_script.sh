@@ -14,9 +14,19 @@ seq_len=2048
 ## from the MT-NLG 530B work (https://arxiv.org/pdf/2201.11990.pdf)
 
 ## We changed min_lr to a lower number (1.0e-6), which we found is able to
-## provide better zero-shot eval results.
+## provide better zero-shot eval results. 
 
-## GPT-3 Small 125M
+#GPT-3 test
+model_size=0.125
+num_layers=12
+hidden_size=768
+num_attn_heads=12
+global_batch_size=4
+lr=6.0e-4
+min_lr=1.0e-6
+init_std=0.02
+
+# GPT-3 Small 125M
 # model_size=0.125
 # num_layers=12
 # hidden_size=768
@@ -47,15 +57,15 @@ seq_len=2048
 # init_std=0.015
 
 ## GPT-3 XL 1.3B
-model_size=1.3
-num_layers=24
-hidden_size=2048
-num_attn_heads=16
-global_batch_size=512
-# lr=2.0e-4
-lr=$1
-min_lr=1.0e-6
-init_std=0.013
+# model_size=1.3
+# num_layers=24
+# hidden_size=2048
+# num_attn_heads=16
+# global_batch_size=512
+# # lr=2.0e-4
+# lr=$1
+# min_lr=1.0e-6
+# init_std=0.013
 
 ## GPT-3 2.7B
 # model_size=2.7
@@ -102,13 +112,15 @@ init_std=0.013
 # train_tokens_in_billion=300
 train_tokens_in_billion=$2
 train_tokens=$((${train_tokens_in_billion} * 1000000000))
+# train_tokens=100000
 
 ## train_samples is another termination condition and also affect the number of 
 ## data samples to be indexed. Since we want to reach the train_tokens
 ## above, and data efficiency techniques may change num tokens in some samples,
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
-train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
+# train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
+train_iters=10
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -131,7 +143,7 @@ lr_decay_tokens_in_billion=${train_tokens_in_billion}
 lr_decay_tokens=$((${lr_decay_tokens_in_billion} * 1000000000))
 lr_decay_style="cosine"
 ###############################################################################
-### Parallelism configs
+### Parallelism configsf
 ## Model parallelism, 1 is no MP
 mp_size=1
 
@@ -140,22 +152,27 @@ mp_size=1
 ## compatible with pipeline parallelism.
 pp_size=1
 no_pp="true"
+# no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=1
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-num_gpus=$(($(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)-2))
-num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
-
+# num_gpus=$(($(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)-2))
+# num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+# num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+# num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
+num_node=1
+num_gpus=2
 ## Data parallel size.
-dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
+# dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
+dp_size=2
 
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 ## Reduce it manually if GPU OOM
 batch_size=$(( ${global_batch_size} / ${dp_size} ))
+# echo "batch_size: $batch_size; dp_size: $dp_size"
 ###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
 ## random-LTD's main switch. "false" means disabled. "true" means enabled.
@@ -242,19 +259,21 @@ cl_2nd_root=${27:-1}
 # cl_2nd_root=1
 ###############################################################################
 ### Misc configs
-log_interval=100
-eval_iters=10
+log_interval=10
+# eval_iters=10
+eval_iters=0
 eval_interval=100
 # num_save controls how frequent to save checkpoint. num_save=20 means that a
 # checkpoint will be saved every 5% of training. For longer training you would
 # want larger num_save to save more frequently, and vice versa.
 num_save=100
 estimated_train_iter=$((${train_tokens} / ${seq_len} / ${global_batch_size}))
-save_interval=$((${estimated_train_iter} / ${num_save}))
+# save_interval=$((${estimated_train_iter} / ${num_save}))
+save_interval=10
 
 ## Activation checkpointing saves GPU memory, but reduces training speed
-activation_checkpoint="true"
-# activation_checkpoint="false"
+# activation_checkpoint="true"
+activation_checkpoint="false"
 
 ## Whether or not log optimizer states (norms, max abs values) to tensorboard.
 ## This is not required for training and might save GPU memory when turned off.
@@ -269,11 +288,16 @@ num_workers=0
 ## Public the Pile dataset, can be downloaded at
 ## https://mystic.the-eye.eu/public/AI/pile_neox/ Change data_home to where you
 ## store the pile_text_document.bin and pile_text_document.idx.
-data_home="/vc_data_blob/users/conglli/the_pile_public_merged_nopreprocessing"
+# data_home="/vc_data_blob/users/conglli/the_pile_public_merged_nopreprocessing"
+# if [[ "$host" == *"webxt"* ]]; then
+#     data_home="/blob/data/the_pile_public_merged_nopreprocessing"
+# fi
+# data_path="${data_home}/pile_text_document"
+data_home="/data2/share/md_test/md_preprocess"
 if [[ "$host" == *"webxt"* ]]; then
-    data_home="/blob/data/the_pile_public_merged_nopreprocessing"
+    data_home="/data2/share/md_test/md_preprocess"
 fi
-data_path="${data_home}/pile_text_document"
+data_path="${data_home}/wikioutput_text_document"
 ## *_idx_path force Megatron to use a specific data index file generated when
 ## we analyze data. This is needed because our index for curriculum learning
 ## difficulty metric is based on this data index.
@@ -316,20 +340,30 @@ if [ "${cl_enabled}" = "true" ]; then
 fi
 
 username=$(whoami)
-output_home="/blob/users/${username}/project/data_efficient_gpt"
+# output_home="/blob/users/${username}/project/data_efficient_gpt"
+output_home="/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 log_path="${output_home}/log/"
-checkpoint_path="${output_home}/checkpoint/${jobname}"
+# checkpoint_path="${output_home}/checkpoint/${jobname}"
+checkpoint_path="/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/save"
 ## Microsoft internal constraint: because tensorboard is logged by last rank,
 ## it's better to put the path in NFS instead of Blob.
-tensorboard_dir="/vc_data/users/${username}/project/data_efficient_gpt/tensorboard/"
-tensorboard_path="${tensorboard_dir}${jobname}_${host}_${current_time}"
-mkdir -p ${log_path}
-mkdir -p ${checkpoint_path}
-mkdir -p ${tensorboard_path}
+tensorboard_dir="/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/tensorboard"
+tensorboard_path=""
+# If log_path is not "", then mkdir
+if [ "${log_path}" != "" ]; then
+    mkdir -p ${log_path}
+fi
+if [ "${checkpoint_path}" != "" ]; then
+    mkdir -p ${checkpoint_path}
+fi
+if [ "${tensorboard_path}" != "" ]; then
+    mkdir -p ${tensorboard_path}
+fi
 if [ "${cl_enabled}" = "true" ]; then
     data_cluster_path="${output_home}/data_cluster/${jobname}"
     mkdir -p ${data_cluster_path}
 fi
+
 ###############################################################################
 data_options=" \
     --vocab-file ${vocab_path} \
@@ -356,7 +390,7 @@ megatron_options=" \
     --seq-length ${seq_len} \
     --max-position-embeddings ${seq_len} \
     --train-tokens ${train_tokens} \
-    --train-samples ${train_samples} \
+    --train-iters ${train_iters} \
     --lr ${lr} \
     --min-lr ${min_lr} \
     --lr-decay-style ${lr_decay_style} \
@@ -371,13 +405,19 @@ megatron_options=" \
     --num-workers ${num_workers} \
     --fp16 \
     --seed ${seed} \
-    --load ${checkpoint_path} \
-    --save ${checkpoint_path} \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard \
-    --tensorboard-dir ${tensorboard_path}"
+    --log-validation-ppl-to-tensorboard"
+
+if [[ -n "${checkpoint_path}" ]]; then
+    megatron_options+=" --save ${checkpoint_path}"
+    megatron_options+=" --load ${checkpoint_path}"
+fi
+
+if [[ -n "${tensorboard_path}" ]]; then
+    megatron_options+=" --tensorboard-dir ${tensorboard_path}"
+fi
 
 if [ "${activation_checkpoint}" = "true" ]; then
 megatron_options="${megatron_options} \
@@ -476,12 +516,11 @@ sed "s/GBSIZE/${global_batch_size}/" ${template_json} \
     | sed "s/CL_1st_ROOT/${cl_1st_root}/" \
       > ${config_json}
 fi
-
 deepspeed_options=" \
     --deepspeed \
     --deepspeed_config ${config_json} \
     --zero-stage ${zero_stage} \
-    --pipeline-model-parallel-size ${pp_size}"
+    --pipeline-model-parallel-size ${pp_size}" 
 
 if [[ "${no_pp}" = "true" ]]; then
 deepspeed_options="${deepspeed_options} \
@@ -512,4 +551,6 @@ if [[ $iteration -gt 0 ]]; then
     ds_ssh "echo $iteration_2 > $iteration_file_2"
 fi
 
-deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${jobname}_${host}_${current_time}.log
+# deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
+# deepspeed --hostfile=hostfile --include="10.120.16.175:2@10.120.16.165:2" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
