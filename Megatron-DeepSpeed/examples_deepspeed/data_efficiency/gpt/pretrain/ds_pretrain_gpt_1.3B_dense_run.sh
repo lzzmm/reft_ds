@@ -18,7 +18,6 @@
 ## Baseline 150B tokens (50%):
 lr=4.0e-4
 train_tokens_in_billion=150
-export CUDA_VISIBLE_DEVICES=0,1
 bash ds_pretrain_gpt_1.3B_dense_base_script.sh ${lr} \
     ${train_tokens_in_billion}
 ###############################################################################

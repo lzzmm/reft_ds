@@ -27,7 +27,11 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def create(self, tag):
         log_dist(f"[AsyncCkpt] Checkpoint {tag} is about to be saved!", ranks=[0])
 
-    def save(self, state_dict, path: str, device='cuda:0', snapshot_=True, use_copy_=True, snapshot_stream=torch.cuda.Stream(), shard_info_dict={}):
+    def save(self, state_dict, path: str, device='cuda:0', snapshot_=True, use_copy_=True, snapshot_stream=torch.cuda.Stream(), parity_stream=torch.cuda.Stream(), shard_info_dict={}):
+        info_dir = "/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+        info_path = os.path.join(info_dir, "info.txt")
+        with open(info_path, "w") as f:
+            f.write(str(state_dict))
         assert shard_info_dict != {}
         start_time = time.time()
         self.state_dict_cpu = {}
@@ -38,6 +42,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         else:
             self.save_checkpoint(state_dict, path, start_time)
         logger.info(f"[AsyncCkpt] Saved {path}.")
+        self.calculate_parity(state_dict, parity_stream, shard_info_dict)
         return None
 
     def load(self, path: str, map_location=None):
@@ -49,6 +54,75 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def commit(self, tag):
         logger.info(f"[AsyncCkpt] Checkpoint {tag} is ready now!")
         return True
+    def calculate_parity(self, state_dict, parity_stream, shard_info_dict):
+        logger.info(f"[AsyncCkpt] Calculating parity...")
+        
+        parity_thread = threading.Thread(
+            target=self._calculate_parity_thread,
+            args=(state_dict, parity_stream, shard_info_dict)
+        )
+        parity_thread.start()
+        return parity_thread
+    def _calculate_parity_thread(self, state_dict, parity_stream, shard_info_dict):
+        start_time = time.time()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._calculate_parity(state_dict, parity_stream, shard_info_dict))
+        finally:
+            loop.close()
+        end_time = time.time()
+        print(f"parity time: {end_time - start_time}\n")
+    async def _calculate_parity(self, state_dict, parity_stream, shard_info_dict):
+        def compute_xor(*gpu_tensors): 
+            int_tensors = [tensor.view(torch.int32) for tensor in gpu_tensors]   
+            parity = torch.zeros_like(int_tensors[0])
+            for tensor in int_tensors:
+                parity ^= tensor
+                
+            return parity
+        if shard_info_dict['pipeline_model_parallel_size'] > 1:
+            start_num = 2
+        else:
+            start_num = 0
+        model_params_dict = state_dict['module']['language_model']
+        # Obtain the layers current rank is responsible for calculating parity
+        dp_rank = shard_info_dict['data_parallel_rank']
+        assert shard_info_dict['num_layers'] % shard_info_dict['data_parallel_size'] == 0
+        layers_per_rank = shard_info_dict['num_layers'] // shard_info_dict['data_parallel_size']
+        parity_layer_num_list = []
+        for i in range(dp_rank - 1): # For the nodes' dp_rank smaller than current dp_rank
+            parity_layer_num_list.append(start_num + i * layers_per_rank + dp_rank - 1)
+        for i in range(dp_rank + 1, shard_info_dict['num_layers']): # For the nodes' dp_rank larger than current dp_rank
+            parity_layer_num_list.append(start_num + i * layers_per_rank + dp_rank)
+        
+        parity_tensor_dict = {}
+        # Traverse model_params_dict keys, and if parity_layer_num_list[0] is in the key, then add the key and tensor to the parity_tensor_dict, do this until the current key is not in parity_layer_num_list[0], delete parity_layer_num_list[0] and use the next number to compare with the key, continue until parity_layer_num_list is empty
+        layer_num_list_pointer = 0
+        model_params_dict_pointer = 0
+        is_match = False
+        while True:
+            if layer_num_list_pointer == len(parity_layer_num_list):
+                break
+            if model_params_dict_pointer == len(model_params_dict.keys()):
+                break
+            if str(parity_layer_num_list[layer_num_list_pointer]) in model_params_dict.keys()[model_params_dict_pointer]:
+                parity_tensor_dict[model_params_dict.keys()[model_params_dict_pointer]] = model_params_dict.values()[model_params_dict_pointer]
+                is_match = True
+            else:
+                if is_match:
+                    layer_num_list_pointer += 1
+                    is_match = False
+            model_params_dict_pointer += 1
+        logger.info("dp_rank", dp_rank, "parity_tensor_dict", str(parity_tensor_dict.keys()))
+        # Calculate parity
+        with torch.cuda.stream(parity_stream):
+            parity_tensors = [tensor for tensor in parity_tensor_dict.values()]
+            parity = compute_xor(*parity_tensors)
+            return parity
+            
+            
+        
     
     def make_snapshot(self, state_dict, use_copy_, snapshot_stream, device, shard_info_dict):
         logger.info(f"[AsyncCkpt] Snapshoting...")

@@ -382,6 +382,24 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
 
     if not isinstance(model, list):
         model = [model]
+        
+    # n_model = model[0]
+    # # Get model state dict
+    # model_state_dict = n_model.state_dict()
+    # # Get current node 3D parallel rank
+    # dp_rank = mpu.get_data_parallel_rank()
+    # pp_rank = mpu.get_pipeline_model_parallel_rank()
+    # tp_rank = mpu.get_tensor_model_parallel_rank()
+    
+    # info_dir = "/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+    # # info_path is the 3D parallel rank
+    # info_path = os.path.join(info_dir, f"info_dp_{dp_rank}_pp_{pp_rank}_tp_{tp_rank}.json")
+    # # write model_state_dict to info_path, don't write the tensor, just the shape
+    # with open(info_path, 'w') as f:
+    #     # write the name and the shape
+    #     for k, v in model_state_dict.items():
+    #         f.write(f"{k}: {v.shape}\n")
+    # exit(0)
 
     # Disallow training and inference with Transformer Engine
     # for non-GPT models

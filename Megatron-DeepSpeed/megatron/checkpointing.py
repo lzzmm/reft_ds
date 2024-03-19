@@ -300,7 +300,8 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info
 
         # Trim off the filename and mp_rank_* directory.
         for _ in range(3):
-            checkpoint_name = os.path.dirname(checkpoint_name)
+            checkpoint_name = os.path.dirname(checkpoint_name)    
+        
         model[0].save_checkpoint(checkpoint_name, client_state=state_dict, shard_info_dict=shard_info_dict)
 
         if args.no_pipeline_parallel:
@@ -625,40 +626,7 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
     print_rank_0(f' checkpoint version {checkpoint_version}')
     fix_query_key_value_ordering(model, checkpoint_version)
 
-    # Optimizer.
-    if not args.deepspeed:
-        if not release and not args.finetune and not args.no_load_optim:
-            try:
-                # Load state dict.
-                if optimizer is not None:
-                    optimizer.load_state_dict(state_dict['optimizer'])
-
-                # Load distributed optimizer's custom parameter state.
-                if args.use_distributed_optimizer:
-                    tracker_filename = get_checkpoint_tracker_filename(load_dir)
-                    iteration, release = read_metadata(tracker_filename)
-                    model_checkpoint_name = \
-                        get_checkpoint_name(load_dir, iteration, release)
-                    optim_checkpoint_name = \
-                        get_distributed_optimizer_checkpoint_name(
-                            model_checkpoint_name)
-                    optimizer.load_parameter_state(optim_checkpoint_name)
-
-                # Load scheduler.
-                if opt_param_scheduler is not None:
-                    if 'lr_scheduler' in state_dict: # backward compatbility
-                        opt_param_scheduler.load_state_dict(state_dict['lr_scheduler'])
-                    else:
-                        opt_param_scheduler.load_state_dict(state_dict['opt_param_scheduler'])
-            except KeyError:
-                print_rank_0('Unable to load optimizer from checkpoint {}. '
-                            'Specify --no-load-optim or --finetune to prevent '
-                            'attempting to load the optimizer state, '
-                            'exiting ...'.format(checkpoint_name))
-                sys.exit()
-        else:
-            if (args.fp16 or args.bf16) and optimizer is not None:
-                optimizer.reload_model_params()
+    c
 
     # rng states.
     if not release and not args.finetune and not args.no_load_rng:

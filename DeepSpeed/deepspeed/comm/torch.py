@@ -118,7 +118,9 @@ class TorchBackend(Backend):
         # The idea is to fake that dist backend is initialized even when
         # it is not so we can run on a single GPU without doing any init_process_group
         self.single_gpu_mode = True
+        utils.logger.info("start init_process_group")
         self.init_process_group(backend, timeout, init_method, rank, world_size)
+        utils.logger.info("end init_process_group") 
 
     @classmethod
     @compiler.disable
