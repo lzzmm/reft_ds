@@ -1198,7 +1198,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     profiler_context = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
             schedule=torch.profiler.schedule(
-                skip_first=10,
+                skip_first=100,
                 wait=0,
                 warmup=5,
                 active=10,

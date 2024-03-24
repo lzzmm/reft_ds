@@ -28,12 +28,13 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def create(self, tag):
         log_dist(f"[AsyncCkpt] Checkpoint {tag} is about to be saved!", ranks=[0])
 
-    def save(self, state_dict, path: str, device='cuda:0', snapshot_=True, use_copy_=True, snapshot_stream=torch.cuda.Stream(torch.cuda.current_device()), parity_stream=torch.cuda.Stream(), shard_info_dict={}):
+    def save(self, state_dict, path: str, device='cuda:0', snapshot_=True, use_copy_=True, snapshot_stream=torch.cuda.Stream(), parity_stream=torch.cuda.Stream(), shard_info_dict={}):
         # print(f"rank: {dist.get_rank()}, in engine save")
-        # info_dir = "/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
-        # info_path = os.path.join(info_dir, "info.txt")
-        # with open(info_path, "w") as f:
-        #     f.write(str(state_dict))
+        info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+        time_stamp = datetime.now().strftime("%m%d-%H%M%S")
+        info_path = os.path.join(info_dir, time_stamp + "_info.txt")
+        with open(info_path, "w") as f:
+            f.write(str(state_dict))
         # assert shard_info_dict != {}
         start_time = time.time()
         self.state_dict_cpu = {}
@@ -349,12 +350,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
             stack = [(state_dict, None, None)]
             root = None
             shard_layers = get_shard_layers(shard_info_dict)
+            stored_keys = []
 
             while stack:
                 current, parent, key = stack.pop() # current is an object in state_dict, it could be a tensor, a list or a dict
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
                     if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
                         continue
+                    stored_keys.append(key)
                     if torch.tensor(current.size()).prod().item() > 16777216: # 4096*4096
                         current = current.chunk(8)[0].clone()
                     cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
@@ -383,7 +386,11 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         parent[key] = current
                     else:
                         root = current
-
+            info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+            time_stamp = datetime.now().strftime("%m%d-%H%M%S")
+            info_path = os.path.join(info_dir, f"{time_stamp}_rank_{shard_info_dict['data_parallel_rank']}_stored_keys.txt")
+            with open(info_path, "w") as f:
+                f.write(str(stored_keys))
             return root
 
         def _copy_tensors_to_cpu_buffers(data, cpu_buffers, use_copy_, shard_info_dict):
@@ -421,11 +428,11 @@ class AsyncCheckpointEngine(CheckpointEngine):
         
         # print("buffer", self.state_dict_cpu)
 
-        snapshot_stream.wait_stream(torch.cuda.default_stream(device))
+        snapshot_stream.wait_stream(torch.cuda.default_stream(torch.cuda.current_device()))
         with torch.cuda.stream(snapshot_stream):
             # self.state_dict_cpu = _copy_tensors_to_cpu(state_dict, use_copy_)
             _copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, shard_info_dict)
-            # torch.save(self.state_dict_cpu, self.path) 
+            torch.save(self.state_dict_cpu, self.path) 
             
         timestamp = datetime.now().strftime('%H:%M:%S:%X')
         print(f"[{timestamp}][{device}] end _copy_tensors_to_cpu_buffers")

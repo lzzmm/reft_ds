@@ -3356,13 +3356,13 @@ class DeepSpeedEngine(Module):
                      ds_version=version)
         state.update(client_state)
 
-        if self.save_non_zero_checkpoint:
-            log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
-            if isinstance(self.checkpoint_engine, AsyncCheckpointEngine):
-                print("is async")
-                self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict)
-            else:
-                self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}')
+        # if self.save_non_zero_checkpoint:
+        log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
+        if isinstance(self.checkpoint_engine, AsyncCheckpointEngine):
+            print("is async")
+            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict)
+        else:
+            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}')
 
     def _get_buffer_names(self):
         buffer_names = []

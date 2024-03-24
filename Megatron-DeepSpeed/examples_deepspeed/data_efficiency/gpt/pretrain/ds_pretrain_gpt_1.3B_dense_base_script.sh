@@ -17,14 +17,14 @@ seq_len=2048
 ## provide better zero-shot eval results. 
 
 #GPT-3 test
-# model_size=0.125
-# num_layers=12
-# hidden_size=768
-# num_attn_heads=12
-# global_batch_size=32
-# lr=6.0e-4
-# min_lr=1.0e-6
-# init_std=0.02
+model_size=0.125
+num_layers=12
+hidden_size=768
+num_attn_heads=12
+global_batch_size=16
+lr=6.0e-4
+min_lr=1.0e-6
+init_std=0.02
 
 # GPT-3 Small 125M
 # model_size=0.125
@@ -37,14 +37,14 @@ seq_len=2048
 # init_std=0.02
 
 ## GPT-3 Medium 350M
-model_size=0.35
-num_layers=24
-hidden_size=1024
-num_attn_heads=16
-global_batch_size=20
-lr=3.0e-4
-min_lr=1.0e-6
-init_std=0.018
+# model_size=0.35
+# num_layers=24
+# hidden_size=1024
+# num_attn_heads=16
+# global_batch_size=20
+# lr=3.0e-4
+# min_lr=1.0e-6
+# init_std=0.018
 
 ## GPT-3 Large 760M
 # model_size=0.76
@@ -120,7 +120,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=30
+train_iters=10
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -145,7 +145,7 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=4
+mp_size=1
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
@@ -162,11 +162,11 @@ zero_stage=0
 # num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
-num_node=1
-num_gpus=4
+num_node=2
+num_gpus=2
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=1
+dp_size=2
 
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -269,7 +269,7 @@ eval_interval=100
 num_save=100
 estimated_train_iter=$((${train_tokens} / ${seq_len} / ${global_batch_size}))
 # save_interval=$((${estimated_train_iter} / ${num_save}))
-save_interval=1
+save_interval=10
 
 ## Activation checkpointing saves GPU memory, but reduces training speed
 # activation_checkpoint="true"
@@ -552,5 +552,5 @@ if [[ $iteration -gt 0 ]]; then
 fi
 
 # deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
-# deepspeed --hostfile=hostfile --include="10.120.16.175:2@10.120.16.165:2" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-deepspeed --include localhost:0,1,6,7 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --hostfile=hostfile --include="10.120.20.165:0@10.120.20.175:0" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+# deepspeed --include localhost:0 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
