@@ -14,9 +14,9 @@
 # bash ds_pretrain_bert_336M_base_script.sh ${lr} ${train_iters_in_million}
 ###############################################################################
 ## Baseline 524B tokens (50%):
-# lr=2e-4
-# train_iters_in_million=1
-# bash ds_pretrain_bert_336M_base_script.sh ${lr} ${train_iters_in_million}
+lr=2e-4
+train_iters_in_million=1
+bash ds_pretrain_bert_336M_base_script.sh ${lr} ${train_iters_in_million}
 ###############################################################################
 ### Curriculum learning (CL) + Random layerwise token dropping (random-LTD).
 ### DeepSpeed Data Efficiency's composed solution.

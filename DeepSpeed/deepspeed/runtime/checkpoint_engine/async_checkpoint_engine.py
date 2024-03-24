@@ -14,6 +14,7 @@ import io
 from datetime import datetime
 import time
 from torch.profiler import profile, record_function
+import torch.distributed as dist
 
    
 class AsyncCheckpointEngine(CheckpointEngine):
@@ -28,11 +29,12 @@ class AsyncCheckpointEngine(CheckpointEngine):
         log_dist(f"[AsyncCkpt] Checkpoint {tag} is about to be saved!", ranks=[0])
 
     def save(self, state_dict, path: str, device='cuda:0', snapshot_=True, use_copy_=True, snapshot_stream=torch.cuda.Stream(), parity_stream=torch.cuda.Stream(), shard_info_dict={}):
+        # print(f"rank: {dist.get_rank()}, in engine save")
         info_dir = "/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
         info_path = os.path.join(info_dir, "info.txt")
         with open(info_path, "w") as f:
             f.write(str(state_dict))
-        assert shard_info_dict != {}
+        # assert shard_info_dict != {}
         start_time = time.time()
         self.state_dict_cpu = {}
         if snapshot_:
@@ -42,7 +44,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         else:
             self.save_checkpoint(state_dict, path, start_time)
         logger.info(f"[AsyncCkpt] Saved {path}.")
-        self.calculate_parity(state_dict, parity_stream, shard_info_dict)
+        # self.calculate_parity(state_dict, parity_stream, shard_info_dict)
         return None
 
     def load(self, path: str, map_location=None):
@@ -81,11 +83,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 parity ^= tensor
                 
             return parity
+        
+        # print rank and shard_info_dict
+        logger.info(f"rank: {dist.get_rank()}, shard_info_dict: {shard_info_dict}")
         if shard_info_dict['pipeline_model_parallel_size'] > 1:
             start_num = 2
         else:
             start_num = 0
-        model_params_dict = state_dict['module']['language_model']
+        model_params_dict = state_dict['module']['language_model']['encoder']
         # Obtain the layers current rank is responsible for calculating parity
         dp_rank = shard_info_dict['data_parallel_rank']
         assert shard_info_dict['num_layers'] % shard_info_dict['data_parallel_size'] == 0
@@ -96,30 +101,23 @@ class AsyncCheckpointEngine(CheckpointEngine):
         for i in range(dp_rank + 1, shard_info_dict['num_layers']): # For the nodes' dp_rank larger than current dp_rank
             parity_layer_num_list.append(start_num + i * layers_per_rank + dp_rank)
         
-        parity_tensor_dict = {}
+        parity_tensor_dict_list = [{} for i in range(len(parity_layer_num_list))]
         # Traverse model_params_dict keys, and if parity_layer_num_list[0] is in the key, then add the key and tensor to the parity_tensor_dict, do this until the current key is not in parity_layer_num_list[0], delete parity_layer_num_list[0] and use the next number to compare with the key, continue until parity_layer_num_list is empty
-        layer_num_list_pointer = 0
-        model_params_dict_pointer = 0
-        is_match = False
-        while True:
-            if layer_num_list_pointer == len(parity_layer_num_list):
-                break
-            if model_params_dict_pointer == len(model_params_dict.keys()):
-                break
-            if str(parity_layer_num_list[layer_num_list_pointer]) in model_params_dict.keys()[model_params_dict_pointer]:
-                parity_tensor_dict[model_params_dict.keys()[model_params_dict_pointer]] = model_params_dict.values()[model_params_dict_pointer]
-                is_match = True
-            else:
-                if is_match:
-                    layer_num_list_pointer += 1
-                    is_match = False
-            model_params_dict_pointer += 1
-        logger.info("dp_rank", dp_rank, "parity_tensor_dict", str(parity_tensor_dict.keys()))
+        # print("model_params_dict", model_params_dict.keys())
+        # logger.info(f"dp_rank: {dp_rank}, parity_layer_num_list: {parity_layer_num_list}")
+        for key, tensor in model_params_dict.items():
+            for i, layer_num in enumerate(parity_layer_num_list):
+                if str(layer_num) in key:  # This checks for the layer number in the key more robustly
+                    parity_tensor_dict_list[i][key] = tensor
+                    break  # Move to the next key once a match is found, improving efficiency
+
+        for i in range(len(parity_tensor_dict_list)):
+            logger.info(f"dp_rank: {dp_rank}, parity_tensor_dict_list[{i}]: {parity_tensor_dict_list[i].keys()}")
         # Calculate parity
-        with torch.cuda.stream(parity_stream):
-            parity_tensors = [tensor for tensor in parity_tensor_dict.values()]
-            parity = compute_xor(*parity_tensors)
-            return parity
+        # with torch.cuda.stream(parity_stream):
+        #     parity_tensors = [tensor for tensor in parity_tensor_dict_list.values()]
+        #     parity = compute_xor(*parity_tensors)
+        #     return parity
             
             
         
@@ -363,6 +361,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         with torch.cuda.stream(snapshot_stream):
             # self.state_dict_cpu = _copy_tensors_to_cpu(state_dict, use_copy_)
             _copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, shard_info_dict)
+            torch.save(self.state_dict_cpu, self.path) 
             
         timestamp = datetime.now().strftime('%H:%M:%S:%X')
         print(f"[{timestamp}][{device}] end _copy_tensors_to_cpu_buffers")

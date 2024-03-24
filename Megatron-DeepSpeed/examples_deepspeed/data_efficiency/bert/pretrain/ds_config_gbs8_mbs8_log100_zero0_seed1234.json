@@ -1,14 +1,14 @@
 {
-  "train_batch_size": 4,
-  "train_micro_batch_size_per_gpu": 2,
-  "steps_per_print": 10,
+  "train_batch_size": 8,
+  "train_micro_batch_size_per_gpu": 8,
+  "steps_per_print": 100,
 
   "zero_optimization": {
-    "stage": 1
+    "stage": 0
   },
 
   "gradient_clipping": 1.0,
-  "prescale_gradients": false,
+  "prescale_gradients": true,
 
   "fp16": {
     "enabled": true,
@@ -32,14 +32,14 @@
         "random_ltd_layer_num": 22,
         "random_ltd_layer_id": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22],
         "model_mask_name": "attention_mask",
-        "model_type": "decoder",
+        "model_type": "encoder",
         "hidden_state_order": "seq_batch_dim",
         "random_ltd_schedule": {
-          "min_value": 2048,
-          "max_value": 2048,
+          "min_value": 512,
+          "max_value": 512,
           "schedule_type":"fixed_linear",
           "schedule_config": {
-            "require_steps": 1,
+            "require_steps": 1000000,
             "seq_per_step": 16
           }
         }
@@ -47,7 +47,7 @@
     },
     "data_sampling": {
       "enabled": false,
-      "num_workers": 0,
+      "num_workers": 4,
       "curriculum_learning": {
         "enabled": false,
         "data_cluster_path": "",
@@ -57,11 +57,11 @@
             "index_to_metric_path": "dummy",
             "difficulty_type": "value",
             "clustering_type": "single_cluster",
-            "min_difficulty": 2048,
-            "max_difficulty": 2048,
+            "min_difficulty": 512,
+            "max_difficulty": 512,
             "schedule_type": "fixed_root",
             "schedule_config": {
-              "total_curriculum_step": 1,
+              "total_curriculum_step": 1000000,
               "difficulty_step": 1,
               "root_degree": 1
             }

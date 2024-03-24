@@ -2798,7 +2798,7 @@ class DeepSpeedEngine(Module):
                          load_optimizer_states=True,
                          load_lr_scheduler_states=True,
                          load_module_only=False,
-                         custom_load_fn=None):
+                         custom_load_fn=None, shard_info_dict={}):
 
         from deepspeed.runtime.state_dict_factory import SDLoaderFactory
 
@@ -2835,7 +2835,23 @@ class DeepSpeedEngine(Module):
                                                 mpu=self.mpu,
                                                 num_experts=self.num_experts,
                                                 checkpoint_engine=self.checkpoint_engine)
+        
         if not self.load_universal_checkpoint():
+            import torch.distributed as dist
+            assert shard_info_dict != {}
+            dp_group_ranks = shard_info_dict["dp_group_ranks"] # The dp ranks of the ranks with same tp and pp rank as current rank
+            dp_group = dist.new_group(dp_group_ranks) # The sequence of dp_group_ranks is ascending
+
+            snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
+            snapshot_tensors_dict_list = [None for _ in range(len(dp_group_ranks))]
+            
+            dist.all_gather_object(snapshot_tensors_dict_list, snapshot_tensors_dict, group=dp_group)
+            
+            for gathered_snapshot_tensors_dict in snapshot_tensors_dict_list:
+                for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict:
+                    if snapshot_tensor_name not in snapshot_tensors_dict:
+                        snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
+                    
             self.load_module_state_dict(checkpoint=checkpoint,
                                         strict=load_module_strict,
                                         custom_load_fn=custom_load_fn,
@@ -3080,6 +3096,8 @@ class DeepSpeedEngine(Module):
 
         """
         assert shard_info_dict != {}
+        import torch.distributed as dist
+        print(f"rank: {dist.get_rank()} in deepspeed save_checkpoint")
         if self._optimizer_has_ckpt_event_prologue():
             # Custom preparation for checkpoint save, if applicable
             self.optimizer.checkpoint_event_prologue()
@@ -3297,7 +3315,8 @@ class DeepSpeedEngine(Module):
         return success
 
     def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, shard_info_dict={}):
-
+        import torch.distributed as dist
+        # print(f"rank: {dist.get_rank()} in _save_checkpoint")
         save_path = self._get_ckpt_name(save_dir, tag)
 
         zero_optimizer_state = self.zero_optimization() or self.bfloat16_enabled()

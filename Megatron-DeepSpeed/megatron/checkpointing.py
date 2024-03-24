@@ -8,6 +8,7 @@ import sys
 import numpy as np
 from deepspeed.accelerator import get_accelerator
 import torch
+import torch.distributed as dist
 
 from megatron import update_num_microbatches, get_tokenizer
 from megatron.core import mpu, tensor_parallel
@@ -250,7 +251,6 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info
     # Collect args, model, RNG.
     if not torch.distributed.is_initialized() \
        or mpu.get_data_parallel_rank() == 0 or args.deepspeed:
-
         # Arguments, iteration, and model.
         state_dict = {}
         state_dict['args'] = args
@@ -547,8 +547,11 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
                 load_lr_scheduler_states=False, load_module_only=True,
                 tag=args.load_tag)
         else:
+            dp_group_ranks = dist.get_process_group_ranks(mpu.get_data_parallel_group())
+            shard_info_dict = {}
+            shard_info_dict["dp_group_ranks"] = dp_group_ranks
             loaded_dir, state_dict = model[0].load_checkpoint(load_dir,
-                load_module_strict=strict, tag=args.load_tag)
+                load_module_strict=strict, tag=args.load_tag, shard_info_dict=shard_info_dict)
         if loaded_dir is None:
             print_rank_0('WARNING: could not find the metadata file {} '.format(
                 load_dir))
@@ -625,8 +628,6 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
     checkpoint_version = get_checkpoint_version()
     print_rank_0(f' checkpoint version {checkpoint_version}')
     fix_query_key_value_ordering(model, checkpoint_version)
-
-    c
 
     # rng states.
     if not release and not args.finetune and not args.no_load_rng:

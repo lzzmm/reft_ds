@@ -6,7 +6,7 @@ dir=`pwd`
 ### https://arxiv.org/abs/1909.08053. Choose based on your desired model size
 ### or build your own configs.
 seq_len=512
-global_batch_size=1024
+global_batch_size=4
 # lr=1e-4
 lr=$1
 min_lr=1e-5
@@ -24,18 +24,18 @@ min_lr=1e-5
 
 ## BERT 110M (same config as original BERT-Base model)
 ## This config is not included in Megatron-LM paper
-# model_size=0.11
-# num_layers=12
-# hidden_size=768
-# num_attn_heads=12
-# init_std=0.02
+model_size=0.11
+num_layers=12
+hidden_size=768
+num_attn_heads=12
+init_std=0.02
 
 ## BERT 336M (same config as original BERT-Large model)
-model_size=0.336
-num_layers=24
-hidden_size=1024
-num_attn_heads=16
-init_std=0.02
+# model_size=0.336
+# num_layers=24
+# hidden_size=1024
+# num_attn_heads=16
+# init_std=0.02
 
 ## BERT 1.3B
 # model_size=1.3
@@ -63,7 +63,7 @@ train_tokens_in_billion=$(calc $train_tokens/1000000000)
 
 ## A large enough number of iters, just to make sure we index enough data. The
 ## only effective termination condition is the train_tokens above.
-train_iters=4000000
+train_iters=10
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -73,7 +73,7 @@ exit_duration=30000000
 ## lr warmup and decay duration. Original Megatron paper uses 10000 warmup
 ## iters. We changed lr decay to token based since data efficiency techniques
 ## could change token per step.
-lr_warmup_iters=10000
+lr_warmup_iters=1
 lr_decay_tokens_in_billion=${train_tokens_in_billion}
 lr_decay_tokens=${train_tokens}
 lr_decay_style="linear"
@@ -88,19 +88,21 @@ mp_size=1
 ## DeepSpeed is not integrated with Megatron's own pipeline parallelism.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=1
-no_pp="true"
+pp_size=2
+# no_pp="true"
+no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-num_gpus=$(($(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)-2))
-num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
-
+# num_gpus=$(($(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)-2))
+# num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+# num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
+num_gpus=2
+num_node=1
 ## Data parallel size.
-dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
+dp_size=1
 
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -210,7 +212,8 @@ eval_interval=1000
 # want larger num_save to save more frequently, and vice versa.
 num_save=100
 estimated_train_iter=$((${train_tokens} / ${seq_len} / ${global_batch_size}))
-save_interval=$((${estimated_train_iter} / ${num_save}))
+# save_interval=$((${estimated_train_iter} / ${num_save}))
+save_interval=10
 
 ## Activation checkpointing saves GPU memory, but reduces training speed
 # activation_checkpoint="true"
@@ -234,11 +237,11 @@ num_workers=4
 ## Public the Pile dataset, see ../pile_data_download_preprocess.py about how
 ## to download and preprocess the data. Change data_home to where you store the
 ## pile_bert_train_text_sentence.bin and pile_bert_train_text_sentence.idx.
-data_home="/vc_data_blob/users/conglli/the_pile_bert"
+data_home="/data2/share/md_test/md_preprocess"
 if [[ "$host" == *"webxt"* ]]; then
-    data_home="/blob/data/the_pile_bert"
+    data_home="/data2/share/md_test/md_preprocess"
 fi
-data_path="${data_home}/pile_bert_train_text_sentence"
+data_path="${data_home}/wikioutput_text_document"
 ## train_idx_path forces Megatron to use a specific data index file generated
 ## when we analyze data. This is needed because our index for curriculum
 ## learning difficulty metric is based on this data index.
@@ -275,16 +278,22 @@ if [ "${cl_enabled}" = "true" ]; then
 fi
 
 username=$(whoami)
-output_home="/blob/users/${username}/project/data_efficient_bert"
+output_home="/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/bert/output"
 log_path="${output_home}/log/"
 checkpoint_path="${output_home}/checkpoint/${jobname}"
 ## Microsoft internal constraint: because tensorboard is logged by last rank,
 ## it's better to put the path in NFS instead of Blob.
-tensorboard_dir="/vc_data/users/${username}/project/data_efficient_bert/tensorboard/"
-tensorboard_path="${tensorboard_dir}${jobname}_${host}_${current_time}"
-mkdir -p ${log_path}
-mkdir -p ${checkpoint_path}
-mkdir -p ${tensorboard_path}
+tensorboard_dir="/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/bert/tensorboard"
+tensorboard_path=""
+if [ "${log_path}" != "" ]; then
+    mkdir -p ${log_path}
+fi
+if [ "${checkpoint_path}" != "" ]; then
+    mkdir -p ${checkpoint_path}
+fi
+if [ "${tensorboard_path}" != "" ]; then
+    mkdir -p ${tensorboard_path}
+fi
 if [ "${cl_enabled}" = "true" ]; then
     data_cluster_path="${output_home}/data_cluster/${jobname}"
     mkdir -p ${data_cluster_path}
@@ -328,13 +337,19 @@ megatron_options=" \
     --num-workers ${num_workers} \
     --fp16 \
     --seed ${seed} \
-    --load ${checkpoint_path} \
-    --save ${checkpoint_path} \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard \
-    --tensorboard-dir ${tensorboard_path}"
+    --log-validation-ppl-to-tensorboard"
+
+if [[ -n "${checkpoint_path}" ]]; then
+    megatron_options+=" --save ${checkpoint_path}"
+    megatron_options+=" --load ${checkpoint_path}"
+fi
+
+if [[ -n "${tensorboard_path}" ]]; then
+    megatron_options+=" --tensorboard-dir ${tensorboard_path}"
+fi
 
 if [ "${activation_checkpoint}" = "true" ]; then
 megatron_options="${megatron_options} \
@@ -469,4 +484,5 @@ if [[ $iteration -gt 0 ]]; then
     ds_ssh "echo $iteration_2 > $iteration_file_2"
 fi
 
-deepspeed ${dir}/../../../../pretrain_bert.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${jobname}_${host}_${current_time}.log
+# deepspeed ${dir}/../../../../pretrain_bert.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${jobname}_${host}_${current_time}.log
+deepspeed --include localhost:4,5 ${dir}/../../../../pretrain_bert.py ${megatron_options} ${data_options} ${deepspeed_options}

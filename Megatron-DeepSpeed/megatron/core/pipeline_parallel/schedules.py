@@ -103,6 +103,7 @@ def get_forward_backward_func():
             forward_backward_func = forward_backward_pipelining_without_interleaving
     else:
         forward_backward_func = forward_backward_no_pipelining
+        
     return forward_backward_func
 
 def deallocate_output_tensor(out, deallocate_pipeline_outputs=False):
@@ -998,7 +999,7 @@ def forward_backward_pipelining_without_interleaving(*,
     stages.
 
     Returns dictionary with losses if the last stage, empty dict otherwise."""
-
+    print("pp rank", parallel_state.get_pipeline_model_parallel_rank(), "Run non-interleaved 1F1B schedule")
     if isinstance(model, list):
         assert len(model) == 1, \
             "non-interleaved pipeline parallelism does not support model chunking"
@@ -1099,7 +1100,7 @@ def forward_backward_pipelining_without_interleaving(*,
             input_tensors.append(input_tensor)
             output_tensors.append(output_tensor)
             deallocate_output_tensor(output_tensor[0], config.deallocate_pipeline_outputs)
-
+    
     # Before running 1F1B, need to receive first forward tensor.
     # If all microbatches are run in warmup / cooldown phase, then no need to
     # receive this tensor here.
@@ -1123,7 +1124,7 @@ def forward_backward_pipelining_without_interleaving(*,
                                      input_tensor, forward_data_store, config, collect_non_loss_data,
                                      checkpoint_activations_microbatch)
 
-        if forward_only:
+        if forward_only: # In forward_only mode, backward pass will not take place, this might be for inference
             send_forward(output_tensor, send_tensor_shapes, config)
 
             if not last_iteration:
