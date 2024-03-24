@@ -93,3 +93,4 @@ bookcorpus_data/
 my_test
 Megatron-DeepSpeed/examples_deepspeed/**/save*/
 Megatron-DeepSpeed/examples_deepspeed/**/ds_config_gbs*
+Megatron-DeepSpeed/examples_deepspeed/**/info/
