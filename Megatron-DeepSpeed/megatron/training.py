@@ -1185,7 +1185,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     timers = get_timers()
     if args.data_parallel_size > 1:
         assert args.num_layers % (args.data_parallel_size * (args.data_parallel_size - 1)) == 0
-    args.save= args.save + datetime.now().strftime("%m%d-%H%M%S")
+    args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M%S"))
     
     def trace_handler(p):
         time_stamp = datetime.now().strftime("%m%d-%H%M%S")
@@ -1198,10 +1198,10 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     profiler_context = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
             schedule=torch.profiler.schedule(
-                skip_first=20,
+                skip_first=10,
                 wait=0,
-                warmup=3,
-                active=5,
+                warmup=5,
+                active=10,
                 repeat=1),
             profile_memory=True,
             record_shapes=True, 

@@ -2706,7 +2706,8 @@ class DeepSpeedEngine(Module):
                         load_optimizer_states=True,
                         load_lr_scheduler_states=True,
                         load_module_only=False,
-                        custom_load_fn=None):
+                        custom_load_fn=None,
+                        shard_info_dict={}):
         """
         Load training checkpoint
 
@@ -2757,7 +2758,8 @@ class DeepSpeedEngine(Module):
                                                          load_optimizer_states=load_optimizer_states,
                                                          load_lr_scheduler_states=load_lr_scheduler_states,
                                                          load_module_only=load_module_only,
-                                                         custom_load_fn=custom_load_fn)
+                                                         custom_load_fn=custom_load_fn,
+                                                         shard_info_dict=shard_info_dict)
 
         load_zero_checkpoint = load_path is not None and (self.zero_optimization() or self.bfloat16_enabled())
         if load_zero_checkpoint:
