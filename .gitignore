@@ -91,3 +91,4 @@ bookcorpus_data/
 /apex/
 
 my_test
+Megatron-Deepspeed/examples_deepspeed/**/save*/
