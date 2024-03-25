@@ -661,6 +661,7 @@ def setup_model_and_optimizer(model_provider_func,
             args.iteration = load_checkpoint(model, optimizer, opt_param_scheduler)
             timers('load-checkpoint').stop(barrier=True)
             timers.log(['load-checkpoint'])
+            exit()
         else:
             args.iteration = 0
     else:

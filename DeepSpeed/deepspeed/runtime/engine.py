@@ -2667,7 +2667,7 @@ class DeepSpeedEngine(Module):
             ckpt_name = os.path.join(
                 checkpoints_path,
                 str(tag),
-                "mp_rank_" + mp_rank_str + "_model_states.pt",
+                "dp_rank_" + str(self.mpu.get_data_parallel_rank()) +"_mp_rank_" + mp_rank_str + "_model_states.pt",
             )
         return ckpt_name
 
@@ -2693,6 +2693,7 @@ class DeepSpeedEngine(Module):
     def _get_all_ckpt_names(self, checkpoints_path, tag):
         # It is required that (checkpoints_path, tag) are consistent among all ranks.
         ckpt_file_pattern = self._get_ckpt_name(checkpoints_path, tag, mp_placeholder="*")
+        print(f"data parallel rank: {self.mpu.get_data_parallel_rank()} ckpt_file_pattern: {ckpt_file_pattern}")
         import glob
 
         ckpt_files = glob.glob(ckpt_file_pattern)
@@ -2805,6 +2806,7 @@ class DeepSpeedEngine(Module):
         from deepspeed.runtime.state_dict_factory import SDLoaderFactory
 
         ckpt_list = self._get_all_ckpt_names(load_dir, tag)
+        logger.info(f"data parallel rank {self.mpu.get_data_parallel_rank()} ckpt_list: {ckpt_list}")
         sd_loader = SDLoaderFactory.get_sd_loader(ckpt_list, checkpoint_engine=self.checkpoint_engine)
 
         is_pipe_parallel = isinstance(self.module, PipelineModule)
@@ -2845,14 +2847,16 @@ class DeepSpeedEngine(Module):
             dp_group = dist.new_group(dp_group_ranks) # The sequence of dp_group_ranks is ascending
 
             snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
+            logger.info(f"data parallel rank {self.mpu.get_data_parallel_rank()} snapshot_tensors_dict before: {snapshot_tensors_dict.keys()}")
             snapshot_tensors_dict_list = [None for _ in range(len(dp_group_ranks))]
             
             dist.all_gather_object(snapshot_tensors_dict_list, snapshot_tensors_dict, group=dp_group)
             
             for gathered_snapshot_tensors_dict in snapshot_tensors_dict_list:
-                for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict:
+                for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict.items():
                     if snapshot_tensor_name not in snapshot_tensors_dict:
                         snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
+            logger.info(f"data parallel rank {self.mpu.get_data_parallel_rank()} snapshot_tensors_dict after: {snapshot_tensors_dict.keys()}")
                     
             self.load_module_state_dict(checkpoint=checkpoint,
                                         strict=load_module_strict,

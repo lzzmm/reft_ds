@@ -269,7 +269,7 @@ eval_interval=100
 num_save=100
 estimated_train_iter=$((${train_tokens} / ${seq_len} / ${global_batch_size}))
 # save_interval=$((${estimated_train_iter} / ${num_save}))
-save_interval=10
+save_interval=100
 
 ## Activation checkpointing saves GPU memory, but reduces training speed
 # activation_checkpoint="true"
@@ -412,7 +412,8 @@ megatron_options=" \
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
-    megatron_options+=" --load ${checkpoint_path}"
+    megatron_options+=" --load ${checkpoint_path}/0325-101039"
+    megatron_options+=" --load-tag global_step10"
 fi
 
 if [[ -n "${tensorboard_path}" ]]; then
@@ -552,5 +553,5 @@ if [[ $iteration -gt 0 ]]; then
 fi
 
 # deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
-deepspeed --hostfile=hostfile --include="10.120.20.165:0@10.120.20.175:0" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --hostfile=hostfile --include="10.120.20.165:1@10.120.20.175:0" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include localhost:0 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}

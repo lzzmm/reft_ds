@@ -213,6 +213,20 @@ class AsyncCheckpointEngine(CheckpointEngine):
             per_node_snapshot_layer_num = total_snapshot_layer_num // shard_info_dict['data_parallel_size']
             shard_layers = range(start_num + shard_info_dict['data_parallel_rank'] * per_node_snapshot_layer_num, start_num + (shard_info_dict['data_parallel_rank'] + 1) * per_node_snapshot_layer_num)
             return shard_layers
+        def is_encoder_layer(key, shard_info_dict): 
+            if shard_info_dict['pipeline_model_parallel_size'] > 1:
+                layer_num = key.split('.')[0]
+                if not layer_num.isdigit():
+                    return False
+                if len(key.split('.')) <= 1:
+                    return False
+            else:
+                layer_num = key.split('.')[1]
+                if not layer_num.isdigit():
+                    return False
+                if key.split('.')[0] != "layers":
+                    return False
+            return True
         def is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
             if not isinstance(key, str) or '.' not in key:
                 return False
@@ -240,10 +254,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
             while stack:
                 current, parent, key = stack.pop() # current is an object in state_dict, it could be a tensor, a list or a dict
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                    if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-                        continue
-                    if torch.tensor(current.size()).prod().item() > 16777216: # 4096*4096
-                        current = current.chunk(8)[0].clone()
+                    if is_encoder_layer(key, shard_info_dict):
+                        if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
+                            continue
                     cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
                     if parent is not None:
                         parent[key] = cpu_buffer
@@ -280,12 +293,11 @@ class AsyncCheckpointEngine(CheckpointEngine):
             while stack:
                 current, cpu_buffer, key = stack.pop()
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                    if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-                        continue
+                    if is_encoder_layer(key, shard_info_dict, shard_layers):
+                        if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
+                            continue
                     cpu_buffer = cpu_buffer[key] if key is not None else cpu_buffer
                     if use_copy_:
-                        if torch.tensor(current.size()).prod().item() > 16777216:
-                            current = current.chunk(8)[0].clone()
                         cpu_buffer.copy_(current, non_blocking=True)
                     else:
                         cpu_buffer = current.cpu() # not tested
@@ -328,8 +340,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
             shard_layers = range(start_num + shard_info_dict['data_parallel_rank'] * per_node_snapshot_layer_num, start_num + (shard_info_dict['data_parallel_rank'] + 1) * per_node_snapshot_layer_num)
             return shard_layers
         def is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-            if not isinstance(key, str) or '.' not in key:
-                return False
             if shard_info_dict['pipeline_model_parallel_size'] > 1:
                 layer_num = key.split('.')[0]
                 if not layer_num.isdigit():
@@ -345,7 +355,23 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 return True
             else:
                 return False
-        
+        def is_encoder_layer(key, shard_info_dict): 
+            # if key is not string
+            if not isinstance(key, str) or '.' not in key:
+                return False
+            if shard_info_dict['pipeline_model_parallel_size'] > 1:
+                layer_num = key.split('.')[0]
+                if not layer_num.isdigit():
+                    return False
+                if len(key.split('.')) <= 1:
+                    return False
+            else:
+                layer_num = key.split('.')[1]
+                if not layer_num.isdigit():
+                    return False
+                if key.split('.')[0] != "layers":
+                    return False
+            return True
         def _prepare_cpu_buffers(state_dict, shard_info_dict):
             stack = [(state_dict, None, None)]
             root = None
@@ -355,11 +381,10 @@ class AsyncCheckpointEngine(CheckpointEngine):
             while stack:
                 current, parent, key = stack.pop() # current is an object in state_dict, it could be a tensor, a list or a dict
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                    if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-                        continue
+                    if is_encoder_layer(key, shard_info_dict):
+                        if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
+                            continue
                     stored_keys.append(key)
-                    if torch.tensor(current.size()).prod().item() > 16777216: # 4096*4096
-                        current = current.chunk(8)[0].clone()
                     cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
                     if parent is not None:
                         parent[key] = cpu_buffer
@@ -400,12 +425,11 @@ class AsyncCheckpointEngine(CheckpointEngine):
             while stack:
                 current, cpu_buffer, key = stack.pop()
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                    if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-                        continue
+                    if is_encoder_layer(key, shard_info_dict):
+                        if not is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
+                            continue
                     cpu_buffer = cpu_buffer[key] if key is not None else cpu_buffer
                     if use_copy_:
-                        if torch.tensor(current.size()).prod().item() > 16777216:
-                            current = current.chunk(8)[0].clone()
                         cpu_buffer.copy_(current, non_blocking=True)
                     else:
                         cpu_buffer = current.cpu() # not tested
@@ -433,6 +457,11 @@ class AsyncCheckpointEngine(CheckpointEngine):
             # self.state_dict_cpu = _copy_tensors_to_cpu(state_dict, use_copy_)
             _copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, shard_info_dict)
             torch.save(self.state_dict_cpu, self.path) 
+            saved_state_dict_info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/saved_state_dict"
+            time_stamp = datetime.now().strftime("%m%d-%H%M%S")
+            saved_state_dict_info_path = os.path.join(saved_state_dict_info_dir, f"{time_stamp}_rank_{shard_info_dict['data_parallel_rank']}_state_dict_cpu.txt")
+            with open(saved_state_dict_info_path, "w") as f:
+                f.write(str(self.state_dict_cpu))
             
         timestamp = datetime.now().strftime('%H:%M:%S:%X')
         print(f"[{timestamp}][{device}] end _copy_tensors_to_cpu_buffers")
