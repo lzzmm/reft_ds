@@ -1,5 +1,11 @@
 # reft_ds
 
+## Update
+
+Please use `-e` in installing deepspeed.
+
+`-e` stands for 'editable', this will make your deepspeed stay live with these changes, so you don't need to hack in the changes through site-packages.
+
 ## Troubleshooting
 
 ```sh
@@ -80,7 +86,7 @@ shared memory (/dev/shm) size .... 251.53 GB
 
 ```sh
 cd DeepSpeed
-pip install .
+pip install -e .
 ```
 
 ## Run Megatron-DeepSpeed
