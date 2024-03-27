@@ -2531,7 +2531,7 @@ class DeepSpeedEngine(Module):
         dist.all_gather(tensor_list, value, group=dp_group)
         return tensor_list
 
-    def module_state_dict(self, destination=None, prefix="", keep_vars=False, exclude_frozen_parameters=False):
+    def module_state_dict(self, destination=None, prefix="", keep_vars=False, exclude_frozen_parameters=False, shard_info_dict={}):
         sd = self.module.state_dict(destination, prefix, keep_vars)
 
         # Remove frozen parameter weights from state_dict if specified
@@ -2845,9 +2845,11 @@ class DeepSpeedEngine(Module):
             assert shard_info_dict != {}
             dp_group_ranks = shard_info_dict["dp_group_ranks"] # The dp ranks of the ranks with same tp and pp rank as current rank
             dp_group = dist.new_group(dp_group_ranks) # The sequence of dp_group_ranks is ascending
-
-            snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
-            logger.info(f"data parallel rank {self.mpu.get_data_parallel_rank()} snapshot_tensors_dict before: {snapshot_tensors_dict.keys()}")
+            if self.mpu.get_pipe_parallel_world_size() > 1:
+                snapshot_tensors_dict = checkpoint['module']
+            else:
+                snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
+            # logger.info(f"dp_rank: {self.mpu.get_data_parallel_rank()} pp_rank {self.mpu.get_pipe_parallel_rank()} tp_rank {self.mpu.get_slice_parallel_rank()} snapshot_tensors_dict before: {snapshot_tensors_dict.keys()}")
             snapshot_tensors_dict_list = [None for _ in range(len(dp_group_ranks))]
             
             dist.all_gather_object(snapshot_tensors_dict_list, snapshot_tensors_dict, group=dp_group)
@@ -2856,8 +2858,8 @@ class DeepSpeedEngine(Module):
                 for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict.items():
                     if snapshot_tensor_name not in snapshot_tensors_dict:
                         snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
-            logger.info(f"data parallel rank {self.mpu.get_data_parallel_rank()} snapshot_tensors_dict after: {snapshot_tensors_dict.keys()}")
-                    
+            # logger.info(f"dp_rank: {self.mpu.get_data_parallel_rank()} pp_rank {self.mpu.get_pipe_parallel_rank()} tp_rank {self.mpu.get_slice_parallel_rank()} snapshot_tensors_dict after: {snapshot_tensors_dict.keys()}")
+            exit()        
             self.load_module_state_dict(checkpoint=checkpoint,
                                         strict=load_module_strict,
                                         custom_load_fn=custom_load_fn,
@@ -3085,7 +3087,7 @@ class DeepSpeedEngine(Module):
             elif not valid:
                 logger.warning(msg)
 
-    def save_checkpoint(self, save_dir, tag=None, client_state={}, save_latest=True, exclude_frozen_parameters=False, shard_info_dict={}):
+    def save_checkpoint(self, save_dir, tag=None, client_state={}, save_latest=True, exclude_frozen_parameters=False, shard_info_dict={}, snapshot_stream=None):
         """Save training checkpoint
 
         Arguments:
@@ -3102,8 +3104,6 @@ class DeepSpeedEngine(Module):
 
         """
         assert shard_info_dict != {}
-        import torch.distributed as dist
-        print(f"rank: {dist.get_rank()} in deepspeed save_checkpoint")
         if self._optimizer_has_ckpt_event_prologue():
             # Custom preparation for checkpoint save, if applicable
             self.optimizer.checkpoint_event_prologue()
@@ -3145,11 +3145,11 @@ class DeepSpeedEngine(Module):
             self._save_checkpoint(save_dir,
                                   tag,
                                   client_state=client_state,
-                                  exclude_frozen_parameters=exclude_frozen_parameters, shard_info_dict=shard_info_dict)
+                                  exclude_frozen_parameters=exclude_frozen_parameters, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
 
         if self.save_zero_checkpoint:
             self._create_zero_checkpoint_files(save_dir, tag)
-            self._save_zero_checkpoint(save_dir, tag, shard_info_dict=shard_info_dict)
+            self._save_zero_checkpoint(save_dir, tag, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
 
         if self.zero_has_nvme_offload():
             from shutil import copytree, disk_usage
@@ -3320,7 +3320,7 @@ class DeepSpeedEngine(Module):
 
         return success
 
-    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, shard_info_dict={}):
+    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, shard_info_dict={}, snapshot_stream=None):
         import torch.distributed as dist
         # print(f"rank: {dist.get_rank()} in _save_checkpoint")
         save_path = self._get_ckpt_name(save_dir, tag)
@@ -3334,7 +3334,7 @@ class DeepSpeedEngine(Module):
         # then instead just returns None.  The module_state_dict() implementation in
         # PipelineEngine expects the save path to be set in self._curr_ckpt_path.
         self._curr_ckpt_path = os.path.join(save_dir, tag)
-        module = self.module_state_dict(exclude_frozen_parameters=exclude_frozen_parameters)
+        module = self.module_state_dict(exclude_frozen_parameters=exclude_frozen_parameters, shard_info_dict=shard_info_dict)
         self._curr_ckpt_path = None
 
         state = dict(module=module,
@@ -3363,8 +3363,7 @@ class DeepSpeedEngine(Module):
         # if self.save_non_zero_checkpoint:
         log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
         if isinstance(self.checkpoint_engine, AsyncCheckpointEngine):
-            print("is async")
-            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict)
+            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
         else:
             self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}')
 
@@ -3509,10 +3508,10 @@ class DeepSpeedEngine(Module):
                 f'Warning: Could not change permissions for {dst} due to error: {e}. Continuing without changing permissions.'
             )
 
-    def _save_zero_checkpoint(self, save_path, tag, shard_info_dict={}):
+    def _save_zero_checkpoint(self, save_path, tag, shard_info_dict={}, snapshot_stream=None):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
-        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict)
+        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
 
         if self.global_rank == 0:
             self._copy_recovery_script(save_path)

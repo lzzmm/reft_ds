@@ -1301,45 +1301,46 @@ class PipelineEngine(DeepSpeedEngine):
             f'current alloc={new_alloced:0.4f}GB (delta={delta_alloced:0.4f}GB max={max_alloced:0.4f}GB) '
             f'current cache={new_cached:0.4f}GB (delta={delta_cached:0.4f}GB max={max_cached:0.4f}GB)')
 
-    def module_state_dict(self, exclude_frozen_parameters=False):
-        """Override hack to save a pipe model and return the directory path of the save.
+    # def module_state_dict(self, exclude_frozen_parameters=False, shard_info_dict={}):
+    #     """Override hack to save a pipe model and return the directory path of the save.
 
-        This method should only be called by DeepSpeed's ``save_checkpoint()``. The
-        recommended way of saving a ``PipelineModule`` outside of ``save_checkpoint()``
-        is ``save_state_dict()``.
+    #     This method should only be called by DeepSpeed's ``save_checkpoint()``. The
+    #     recommended way of saving a ``PipelineModule`` outside of ``save_checkpoint()``
+    #     is ``save_state_dict()``.
 
-        Returns:
-            None
-        """
-        assert isinstance(self.module, PipelineModule)
-        assert self._curr_ckpt_path is not None, \
-            "PipelineEngine expects module_state_dict() to be called from save_checkpoint()"
+    #     Returns:
+    #         None
+    #     """
+    #     assert isinstance(self.module, PipelineModule)
+    #     assert self._curr_ckpt_path is not None, \
+    #         "PipelineEngine expects module_state_dict() to be called from save_checkpoint()"
 
-        self.module.save_state_dict(self._curr_ckpt_path,
-                                    checkpoint_engine=self.checkpoint_engine,
-                                    exclude_frozen_params=exclude_frozen_parameters)
-        return None
+    #     self.module.save_state_dict(self._curr_ckpt_path,
+    #                                 checkpoint_engine=self.checkpoint_engine,
+    #                                 exclude_frozen_params=exclude_frozen_parameters,
+    #                                 shard_info_dict=shard_info_dict)
+    #     return None
 
-    def load_module_state_dict(self, checkpoint, strict=True, custom_load_fn=None, fetch_z3_params=False):
-        """Override hack to instead use a directory path.
+    # def load_module_state_dict(self, checkpoint, strict=True, custom_load_fn=None, fetch_z3_params=False):
+    #     """Override hack to instead use a directory path.
 
-        This is important because pipeline models checkpoint by layer instead of rank.
+    #     This is important because pipeline models checkpoint by layer instead of rank.
 
-        If ``state_dict`` is not ``None`` or a ``str``, we revert to ``super()`` expecting a ``dict``.
+    #     If ``state_dict`` is not ``None`` or a ``str``, we revert to ``super()`` expecting a ``dict``.
 
-        Args:
-            state_dict (str, None): unused
-            strict (bool, optional): Strict state loading. Defaults to True.
-        """
-        assert custom_load_fn is None, "custom_load_fn not supported w. pipeline parallelism"
-        state_dict = checkpoint['module']
-        if (state_dict is not None) and (not isinstance(state_dict, str)):
-            super().load_module_state_dict(state_dict, strict)
-            return
+    #     Args:
+    #         state_dict (str, None): unused
+    #         strict (bool, optional): Strict state loading. Defaults to True.
+    #     """
+    #     assert custom_load_fn is None, "custom_load_fn not supported w. pipeline parallelism"
+    #     state_dict = checkpoint['module']
+    #     if (state_dict is not None) and (not isinstance(state_dict, str)):
+    #         super().load_module_state_dict(state_dict, strict)
+    #         return
 
-        self.module.load_state_dir(load_dir=self._curr_ckpt_path,
-                                   strict=strict,
-                                   checkpoint_engine=self.checkpoint_engine)
+    #     self.module.load_state_dir(load_dir=self._curr_ckpt_path,
+    #                                strict=strict,
+    #                                checkpoint_engine=self.checkpoint_engine)
 
     # A map of PipeInstruction types to methods. Each method will be executed with the
     # kwargs provided to the PipeInstruction from the scheduler.

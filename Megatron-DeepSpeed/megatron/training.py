@@ -2,6 +2,7 @@
 
 """Pretrain utilities."""
 
+from contextlib import contextmanager
 from datetime import datetime
 import math
 import sys
@@ -146,7 +147,7 @@ def pretrain(train_valid_test_dataset_provider,
 
     args = get_args()
     timers = get_timers()
-
+    snapshot_stream = torch.cuda.Stream(torch.cuda.current_device())
     if args.deepspeed:
         args.deepspeed_config_dict = _create_ds_config_dict()
         if "curriculum_learning" in args.deepspeed_config_dict and \
@@ -229,7 +230,7 @@ def pretrain(train_valid_test_dataset_provider,
             iteration = train(forward_step_func,
                             model, optimizer, opt_param_scheduler,
                             train_data_iterator, valid_data_iterator,
-                            process_non_loss_data_func)
+                            process_non_loss_data_func, snapshot_stream)
 
         print_datetime('after training is done')
         # Clean the model
@@ -246,7 +247,7 @@ def pretrain(train_valid_test_dataset_provider,
             shard_info_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
             shard_info_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
             shard_info_dict['num_layers'] = args.num_layers
-            save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict)
+            save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
     else:
         print_rank_0('skipping training (--skip-train is on) ...')
 
@@ -1166,21 +1167,22 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
     return report_memory_flag
 
 
-def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, shard_info_dict={}):
+def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, shard_info_dict={}, snapshot_stream=None):
     assert shard_info_dict != {}
     timers = get_timers()
     # Extra barrier is added to make sure
     # all ranks report the max time.
     timers('save-checkpoint', log_level=0).start(barrier=True)
-    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict)
+    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
     timers('save-checkpoint').stop(barrier=True)
     checkpoint_throughput_calculator(model, timers('save-checkpoint').elapsed(reset=False))
     timers.log(['save-checkpoint'])
+    torch.cuda.synchronize()
 
 
 def train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator, valid_data_iterator,
-          process_non_loss_data_func):
+          process_non_loss_data_func, snapshot_stream):
     """Train the model function."""
     args = get_args()
     timers = get_timers()
@@ -1196,19 +1198,25 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         print("trace_file", trace_file)
         p.export_chrome_trace(trace_file)
     
-    profiler_context = torch.profiler.profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
-            schedule=torch.profiler.schedule(
-                skip_first=100,
-                wait=0,
-                warmup=5,
-                active=10,
-                repeat=1),
-            profile_memory=True,
-            record_shapes=True, 
-            with_stack=False,
-            on_trace_ready=trace_handler
-        )
+    @contextmanager
+    def dummy_context():
+        print("use dummy context")
+        yield None
+    
+    # profiler_context = torch.profiler.profile(
+    #         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
+    #         schedule=torch.profiler.schedule(
+    #             skip_first=10,
+    #             wait=0,
+    #             warmup=5,
+    #             active=10,
+    #             repeat=1),
+    #         profile_memory=True,
+    #         record_shapes=True, 
+    #         with_stack=False,
+    #         on_trace_ready=trace_handler
+    #     )
+    profiler_context = dummy_context()
     prof_train = True
     
 
@@ -1343,13 +1351,14 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                 shard_info_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
                 shard_info_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
                 shard_info_dict['num_layers'] = args.num_layers
+                
                 # Checkpointing
                 saved_checkpoint = False
                 if args.exit_signal_handler:
                     signal_handler = get_signal_handler()
                     if any(signal_handler.signals_received()):
                         save_checkpoint_and_time(iteration, model, optimizer,
-                                                opt_param_scheduler, shard_info_dict=shard_info_dict)
+                                                opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
                         print_datetime('exiting program after receiving SIGTERM.')
                         sys.exit()
 
@@ -1357,8 +1366,9 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                 iteration % args.save_interval == 0:
                     # with record_function("save_checkpoint"):
                     save_checkpoint_and_time(iteration, model, optimizer,
-                                            opt_param_scheduler, shard_info_dict=shard_info_dict)
+                                            opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
                     saved_checkpoint = True
+                    
 
                 # Exiting based on duration
                 if args.exit_duration_in_mins:
@@ -1371,7 +1381,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     if done:
                         if not saved_checkpoint:
                             save_checkpoint_and_time(iteration, model, optimizer,
-                                                    opt_param_scheduler, shard_info_dict=shard_info_dict)
+                                                    opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
                         print_datetime('exiting program after {} minutes'.format(train_time))
                         sys.exit()
 
@@ -1380,15 +1390,16 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                 if args.exit_interval and iteration % args.exit_interval == 0:
                     if args.save and not saved_checkpoint:
                         save_checkpoint_and_time(iteration, model, optimizer,
-                                                opt_param_scheduler, shard_info_dict=shard_info_dict)
+                                                opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
                     torch.distributed.barrier()
                     print_datetime('exiting program at iteration {}'.format(iteration))
                     sys.exit()
                 
-                end_time = time.perf_counter()
-                print(f"iter {iteration} time: {end_time - start_time}\n")
                 
-                p.step()
+                end_time = time.perf_counter()
+                print(f"dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()} iter {iteration} time: {end_time - start_time}\n")
+                
+                # p.step()
 
     else:
         while iteration < args.train_iters and (args.train_tokens is None or \

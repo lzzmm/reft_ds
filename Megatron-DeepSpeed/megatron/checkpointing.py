@@ -223,7 +223,7 @@ def get_rng_state():
     return rng_state_list
 
 
-def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict={}):
+def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict={}, snapshot_stream=None):
     """Save a model checkpoint."""
     assert shard_info_dict != {}
     args = get_args()
@@ -302,7 +302,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info
         for _ in range(3):
             checkpoint_name = os.path.dirname(checkpoint_name)    
         
-        model[0].save_checkpoint(checkpoint_name, client_state=state_dict, shard_info_dict=shard_info_dict)
+        model[0].save_checkpoint(checkpoint_name, client_state=state_dict, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
 
         if args.no_pipeline_parallel:
             model[0].module.state_dict = original_state_dict
