@@ -662,7 +662,7 @@ def setup_model_and_optimizer(model_provider_func,
             args.iteration = load_checkpoint(model, optimizer, opt_param_scheduler)
             timers('load-checkpoint').stop(barrier=True)
             timers.log(['load-checkpoint'])
-            exit()
+            # exit()
         else:
             args.iteration = 0
     else:
@@ -1200,7 +1200,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     
     @contextmanager
     def dummy_context():
-        print("use dummy context")
         yield None
     
     # profiler_context = torch.profiler.profile(
@@ -1351,6 +1350,16 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                 shard_info_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
                 shard_info_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
                 shard_info_dict['num_layers'] = args.num_layers
+                # Temp for test by yuhan 24/03/2024
+                shard_info_dict['pre_alloc'] = True
+                shard_info_dict['init_cpu_buffer'] = True if iteration <= 1 and shard_info_dict['pre_alloc'] == True else False
+                
+                # Build CPU Buffer for async D2H cudaMemcpy
+                if shard_info_dict['init_cpu_buffer'] == True: 
+                    # This call save_checkpoint in checkpointing.py
+                    # get state_dict for init cpu buffer but won't save
+                    # cuz shard_info_dict['init_cpu_buffer'] = True
+                    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
                 
                 # Checkpointing
                 saved_checkpoint = False

@@ -15,6 +15,9 @@ from datetime import datetime
 import time
 from torch.profiler import profile, record_function
 import torch.distributed as dist
+from multiprocessing import Process
+import multiprocessing as mp
+
 
    
 class AsyncCheckpointEngine(CheckpointEngine):
@@ -24,69 +27,25 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.thread_lock = threading.Lock()
         self.state_dict_cpu = {}
-        
-    def __update_cpu_buffer(self, state_dict, shard_info_dict):
-        stack = [(state_dict, None, None)]
-        # self.state_dict_cpu = None
-
-        while stack:
-            current, parent, key = stack.pop()
-            if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                if not self.is_snapshot_shard_tensor(key, shard_info_dict, self.get_shard_layers(shard_info_dict)):
-                    continue
-                cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
-                if parent is not None:
-                    parent[key] = cpu_buffer
-                else:
-                    self.state_dict_cpu = cpu_buffer
-            elif isinstance(current, dict):
-                cpu_data = {}
-                for k, v in current.items():
-                    stack.append((v, cpu_data, k))
-                if parent is not None:
-                    parent[key] = cpu_data
-                else:
-                    self.state_dict_cpu = cpu_data
-            elif isinstance(current, list):
-                cpu_data = [None] * len(current)
-                for idx, item in enumerate(current):
-                    stack.append((item, cpu_data, idx))
-                if parent is not None:
-                    parent[key] = cpu_data
-                else:
-                    self.state_dict_cpu = cpu_data
-            else:
-                if parent is not None:
-                    parent[key] = current
-                else:
-                    self.state_dict_cpu = current
-
-    def _init_cpu_buffer(self, state_dict, shard_info_dict):
-        self.__update_cpu_buffer(state_dict, shard_info_dict)
-        logger.info(f"[AsyncCkpt] CPU buffer initialized.")
 
     def create(self, tag):
         log_dist(f"[AsyncCkpt] Checkpoint {tag} is about to be saved!", ranks=[0])
 
-    def save(self, state_dict, path: str, device='cuda:0', snapshot_=True, use_copy_=True, snapshot_stream=torch.cuda.Stream(torch.cuda.current_device()), parity_stream=torch.cuda.Stream(), shard_info_dict={}):
-        # Prepare cpu buffer if shard_info_dict['init_cpu_buffer'] = True
-        if 'init_cpu_buffer' in shard_info_dict and shard_info_dict['init_cpu_buffer'] == True:
-            buffer_init_thread = threading.Thread(
-                target=self._init_cpu_buffer,
-                args=(state_dict, shard_info_dict)
-            )
-            buffer_init_thread.start()
-            # self.__update_cpu_buffer(state_dict)
-            return
-        
+    def save(self, state_dict, path: str, use_copy_=True, snapshot_stream=None, parity_stream=torch.cuda.Stream(), shard_info_dict={}):
         # print(f"rank: {dist.get_rank()}, in engine save")
-        # info_dir = "/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
-        # info_path = os.path.join(info_dir, "info.txt")
-        # with open(info_path, "w") as f:
-        #     f.write(str(state_dict))
+        assert snapshot_stream is not None
+        # logger.info(f"rank: {dist.get_rank()}, current_device: {torch.cuda.current_device()} in engine save")
+        # if shard_info_dict["data_parallel_rank"] == 0:
+        #     info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+        #     time_stamp = datetime.now().strftime("%m%d-%H%M%S")
+        #     info_path = os.path.join(info_dir, f"{time_stamp}_tp_{shard_info_dict['tensor_model_parallel_rank']}_pp_{shard_info_dict['pipeline_model_parallel_rank']}_state_dict.txt")
+        #     with open(info_path, "w") as f:
+        #         f.write(str(state_dict))
         # assert shard_info_dict != {}
-        self.make_snapshot(state_dict, use_copy_, snapshot_stream, device, shard_info_dict)
+        self.state_dict_cpu = {}
         self.path = path
+        self.make_snapshot(state_dict, use_copy_, snapshot_stream, shard_info_dict)
+        # torch.save(state_dict, path)
         logger.info(f"[AsyncCkpt] Saved {path}.")
         # self.calculate_parity(state_dict, parity_stream, shard_info_dict)
         return None
@@ -163,26 +122,40 @@ class AsyncCheckpointEngine(CheckpointEngine):
         #     parity = compute_xor(*parity_tensors)
         #     return parity
             
+            
+        
     
-    def make_snapshot(self, state_dict, use_copy_, snapshot_stream, device, shard_info_dict):
+    def make_snapshot(self, state_dict, use_copy_, snapshot_stream, shard_info_dict):
         logger.info(f"[AsyncCkpt] Snapshoting...")
-
+        # logger.info(f"rank: {dist.get_rank()}, current_device: {torch.cuda.current_device()} in make_snapshot")
         snapshot_thread = threading.Thread(
             target=self._snapshot_thread,
-            args=(state_dict, use_copy_, snapshot_stream, device, shard_info_dict)
+            args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), shard_info_dict)
         )
         snapshot_thread.start()
-        # self.make_snapshot_sync(state_dict, use_copy_, snapshot_stream, device, shard_info_dict)
-        # return snapshot_thread
+        # mp.set_start_method('spawn', force=True)
+        # snapshot_process = Process(target=self._snapshot_thread, 
+        #                            args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), shard_info_dict))
+        # snapshot_process.start()
+        
         
     def _snapshot_thread(self, state_dict, use_copy_, snapshot_stream, device, shard_info_dict):
         # if use_timer and step_cnt > 10:
+        torch.cuda.set_device(device)
+        logger.info(f"rank: {dist.get_rank()}, current_device: {torch.cuda.current_device()} in _snapshot_thread")
         start_time = time.perf_counter()
-        self._make_snapshot(state_dict, use_copy_, snapshot_stream, device, shard_info_dict)
+        # loop = asyncio.new_event_loop()
+        # asyncio.set_event_loop(loop)
+        # try:
+        #     loop.run_until_complete(self._make_snapshot(state_dict, use_copy_, snapshot_stream, device, shard_info_dict))
+        # finally:
+        #     loop.close()
+        self.make_snapshot_sync(state_dict, use_copy_, snapshot_stream, device, shard_info_dict)
+        # if use_timer and step_cnt > 10:
         end_time = time.perf_counter()
-        print(f"snapshot time: {end_time - start_time}\n")
-
- 
+        # print(f"snapshot time: {end_time - start_time}\n")
+        print(f"dp_{shard_info_dict['data_parallel_rank']}_pp_{shard_info_dict['pipeline_model_parallel_rank']}_tp_{shard_info_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}\n")
+        
     def get_shard_layers(self, shard_info_dict):
         if shard_info_dict['pipeline_model_parallel_size'] > 1:
             start_num = 2
@@ -210,6 +183,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             return True
         else:
             return False
+    
     def is_encoder_layer(self, key, shard_info_dict): 
         # if key is not string
         if not isinstance(key, str) or '.' not in key:
@@ -227,22 +201,24 @@ class AsyncCheckpointEngine(CheckpointEngine):
             if key.split('.')[0] != "layers":
                 return False
         return True
-    
-    def _make_snapshot(self, state_dict, use_copy_, snapshot_stream, device, shard_info_dict):
         
+    def make_snapshot_sync(self, state_dict, use_copy_, snapshot_stream, device, shard_info_dict):
+        logger.info(f"rank: {dist.get_rank()}, current_device: {torch.cuda.current_device()} in _make_snapshot")
         def _prepare_cpu_buffers(state_dict, shard_info_dict):
             stack = [(state_dict, None, None)]
             root = None
             shard_layers = self.get_shard_layers(shard_info_dict)
-            stored_keys = []
+            # stored_keys = []
 
             while stack:
                 current, parent, key = stack.pop() # current is an object in state_dict, it could be a tensor, a list or a dict
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                    # if is_encoder_layer(key, shard_info_dict):
-                    if not self.is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-                        continue
-                    stored_keys.append(key)
+                    # if not is_encoder_layer(key, shard_info_dict):
+                    #     continue
+                    if self.is_encoder_layer(key, shard_info_dict):
+                        if not self.is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
+                            continue
+                    # stored_keys.append(key)
                     cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
                     cpu_buffer.copy_(current, non_blocking=True)
                     if parent is not None:
@@ -267,12 +243,10 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         root = cpu_data
                 else:
                     if parent is not None:
-                        parent[key] = None
+                        parent[key] = current
                     else:
                         root = current
-            # print("stored_keys", stored_keys)
             return root
-
 
         def _copy_tensors_to_cpu_buffers(data, cpu_buffers, use_copy_, shard_info_dict):
             stack = [(data, cpu_buffers, None)]
@@ -280,15 +254,12 @@ class AsyncCheckpointEngine(CheckpointEngine):
         
             while stack:
                 current, cpu_buffer, key = stack.pop()
-                if key is not None:
-                    if key not in cpu_buffer:
-                        continue
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
                     if self.is_encoder_layer(key, shard_info_dict):
                         if not self.is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
                             continue
                     cpu_buffer = cpu_buffer[key] if key is not None else cpu_buffer
-                    if use_copy_ and cpu_buffer is not None:
+                    if use_copy_:
                         cpu_buffer.copy_(current, non_blocking=True)
                     else:
                         cpu_buffer = current.cpu() # not tested
@@ -300,89 +271,20 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     cpu_buffer = cpu_buffer[key] if key is not None else cpu_buffer
                     for idx, item in enumerate(current):
                         stack.append((item, cpu_buffer, idx))
-                else: 
-                    if cpu_buffer is not None:
-                        cpu_buffer[key] = current
-                        
-        def _copy_tensors_to_cpu_buffers_prealloc(data, cpu_buffers, use_copy_, shard_info_dict):
-            # DONE: update cpu buffers if key error
-            stack = [(data, cpu_buffers, None)]
-            shard_layers = self.get_shard_layers(shard_info_dict)
-        
-            while stack:
-                current, cpu_buffer, key = stack.pop()
-                if key is not None:
-                    if key not in cpu_buffer:
-                        # print("key not in cpu_buffer: ", key)
-                        if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                            if not self.is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-                                continue
-                            if use_copy_:
-                                if isinstance(cpu_buffer, dict):
-                                    cpu_buffer[key] = torch.empty_like(current, device='cpu').pin_memory()
-                                    cpu_buffer[key].copy_(current, non_blocking=True)
-                                elif isinstance(cpu_buffer, list):
-                                    # for i in range(key-len(cpu_buffer)):
-                                    #     cpu_buffer.append(None)
-                                    cpu_buffer.append(torch.empty_like(current, device='cpu').pin_memory())
-                                    cpu_buffer[key].copy_(current, non_blocking=True)
-                            else:
-                                cpu_buffer[key] = current.cpu() # not tested
-                        elif isinstance(current, dict):
-                            if isinstance(cpu_buffer, dict):
-                                cpu_buffer[key] = {}
-                            elif isinstance(cpu_buffer, list):
-                                # for i in range(key-len(cpu_buffer)):
-                                #     cpu_buffer.append(None)
-                                cpu_buffer.append({None})
-                            cpu_buffer = cpu_buffer[key]
-                            for k, v in current.items():
-                                stack.append((v, cpu_buffer, k))
-                        elif isinstance(current, list):
-                            if isinstance(cpu_buffer, dict):
-                                cpu_buffer[key] = [None] * len(current)
-                            elif isinstance(cpu_buffer, list):
-                                # for i in range(key-len(cpu_buffer)):
-                                #     cpu_buffer.append(None)
-                                cpu_buffer.append([None] * len(current))
-                            cpu_buffer = cpu_buffer[key]
-                            for idx, item in enumerate(current):
-                                stack.append((item, cpu_buffer, idx))
-                        continue
-                    else:
-                        cpu_buffer = cpu_buffer[key]
-                if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                    if not self.is_snapshot_shard_tensor(key, shard_info_dict, shard_layers):
-                        continue
-                    if use_copy_ and cpu_buffer.device.type == 'cpu':
-                        cpu_buffer.copy_(current, non_blocking=True)
-                    else:
-                        cpu_buffer = current.cpu() # not tested
-                elif isinstance(current, dict):
-                    for k, v in current.items():
-                        stack.append((v, cpu_buffer, k))
-                elif isinstance(current, list):
-                    for idx, item in enumerate(current):
-                        stack.append((item, cpu_buffer, idx))
-                else:
-                    pass
-                    # print("not dict or list", type(current))
-                        
-        # timestamp = datetime.now().strftime('%H:%M:%S:%X')
-        # print(f"[{timestamp}][{device}] start _prepare_cpu_buffers")
-                  
-        # self.state_dict_cpu = _prepare_cpu_buffers(state_dict, shard_info_dict)
-        
-        # timestamp = datetime.now().strftime('%H:%M:%S:%X')
-        # print(f"[{timestamp}][{device}] end _prepare_cpu_buffers")
-        
-        # print("buffer", self.state_dict_cpu)
 
-        snapshot_stream.wait_stream(torch.cuda.default_stream(device))
+        snapshot_stream.wait_stream(torch.cuda.default_stream(torch.cuda.current_device()))
         with torch.cuda.stream(snapshot_stream):
-            if 'pre_alloc' in shard_info_dict and shard_info_dict['pre_alloc'] == True:
-                _copy_tensors_to_cpu_buffers_prealloc(state_dict, self.state_dict_cpu, use_copy_, shard_info_dict)
-            else:
-                self.state_dict_cpu = _prepare_cpu_buffers(state_dict, shard_info_dict)
-                _copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, shard_info_dict)
+            # self.state_dict_cpu = _copy_tensors_to_cpu(state_dict, use_copy_)
+            self.state_dict_cpu = _prepare_cpu_buffers(state_dict, shard_info_dict)
+            # _copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, shard_info_dict)
+            # With process
+            save_process = Process(target=torch.save, args=(self.state_dict_cpu, self.path))
+            save_process.start()
+            
+            # With thread
+            # save_thread = threading.Thread(target=torch.save, args=(self.state_dict_cpu, self.path))
+            # save_thread.start()
+            
+            # Direct
             # torch.save(self.state_dict_cpu, self.path) 
+            

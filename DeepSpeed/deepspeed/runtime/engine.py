@@ -86,7 +86,7 @@ from deepspeed.runtime.data_pipeline.data_routing.helper import remove_random_lt
 from deepspeed.runtime.data_pipeline.data_routing.basic_layer import RandomLayerTokenDrop
 
 from deepspeed.runtime.checkpoint_engine.torch_checkpoint_engine import TorchCheckpointEngine
-from deepspeed.runtime.checkpoint_engine.async_checkpoint_engine import AsyncCheckpointEngine
+from deepspeed.runtime.checkpoint_engine.async_checkpoint_engine_no_prealloc import AsyncCheckpointEngine
 from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
 
 from .pipe.module import PipelineModule
@@ -2844,8 +2844,13 @@ class DeepSpeedEngine(Module):
             import torch.distributed as dist
             assert shard_info_dict != {}
             dp_group_ranks = shard_info_dict["dp_group_ranks"] # The dp ranks of the ranks with same tp and pp rank as current rank
-            dp_group = dist.new_group(dp_group_ranks) # The sequence of dp_group_ranks is ascending
-            if self.mpu.get_pipe_parallel_world_size() > 1:
+            try:
+                dp_group = self.mpu.get_data_parallel_group()
+                pipeline_parallel_size = self.mpu.get_pipeline_model_parallel_world_size()
+            except:
+                dp_group = self.mpu.get_data_parallel_group()
+                pipeline_parallel_size = self.mpu.get_pipe_parallel_world_size()
+            if pipeline_parallel_size > 1:
                 snapshot_tensors_dict = checkpoint['module']
             else:
                 snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
@@ -2858,13 +2863,14 @@ class DeepSpeedEngine(Module):
                 for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict.items():
                     if snapshot_tensor_name not in snapshot_tensors_dict:
                         snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
+            
             # logger.info(f"dp_rank: {self.mpu.get_data_parallel_rank()} pp_rank {self.mpu.get_pipe_parallel_rank()} tp_rank {self.mpu.get_slice_parallel_rank()} snapshot_tensors_dict after: {snapshot_tensors_dict.keys()}")
-            exit()        
+            # exit() 
             self.load_module_state_dict(checkpoint=checkpoint,
                                         strict=load_module_strict,
                                         custom_load_fn=custom_load_fn,
                                         fetch_z3_params=fetch_z3_params)
-
+            
         self.loaded_checkpoint_dp_world_size = checkpoint['dp_world_size']
 
         optim_checkpoint = None

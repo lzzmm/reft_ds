@@ -174,6 +174,20 @@ dp_size=1
 batch_size=$(( ${global_batch_size} / ${dp_size} ))
 # echo "batch_size: $batch_size; dp_size: $dp_size"
 ###############################################################################
+### MOE configs
+EP_SIZE=128
+
+if [[ $EP_SIZE -gt $NUM_GPUS ]]; then
+    EP_PARALLEL_SIZE=$NUM_GPUS
+else
+    EP_PARALLEL_SIZE=$EP_SIZE
+fi
+MOE_TRAIN_CAP_FACTOR=1.0
+MOE_EVAL_CAP_FACTOR=1.0
+MOE_MIN_CAP=4
+MOE_DROP_TOKEN="true"
+# MOE_DROP_TOKEN="false"
+###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
 ## random-LTD's main switch. "false" means disabled. "true" means enabled.
 ltd_enabled=${3:-'false'}
@@ -382,6 +396,12 @@ megatron_options=" \
     --adam-beta1 0.9 \
     --adam-beta2 0.95 \
     --tensor-model-parallel-size ${mp_size} \
+    --moe-expert-parallel-size ${EP_PARALLEL_SIZE} \
+    --num-experts ${EP_SIZE} \
+    --moe-loss-coeff ${MLC} \
+    --moe-train-capacity-factor ${MOE_TRAIN_CAP_FACTOR} \
+    --moe-eval-capacity-factor ${MOE_EVAL_CAP_FACTOR} \
+    --moe-min-capacity ${MOE_MIN_CAP} \
     --init-method-std ${init_std} \
     --lr-decay-tokens ${lr_decay_tokens} \
     --lr-warmup-tokens ${lr_warmup_tokens} \
