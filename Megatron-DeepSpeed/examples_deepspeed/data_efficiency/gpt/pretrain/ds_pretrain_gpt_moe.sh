@@ -27,24 +27,24 @@ seq_len=2048
 # init_std=0.02
 
 # GPT-3 Small 125M
-# model_size=0.125
-# num_layers=12
-# hidden_size=768
-# num_attn_heads=12
-# global_batch_size=256
-# lr=6.0e-4
-# min_lr=1.0e-6
-# init_std=0.02
+model_size=0.125
+num_layers=6
+hidden_size=768
+num_attn_heads=12
+global_batch_size=1
+lr=6.0e-4
+min_lr=1.0e-6
+init_std=0.02
 
 ## GPT-3 Medium 350M
-model_size=0.35
-num_layers=24
-hidden_size=1024
-num_attn_heads=16
-global_batch_size=24
-lr=3.0e-4
-min_lr=1.0e-6
-init_std=0.018
+# model_size=0.35
+# num_layers=24
+# hidden_size=1024
+# num_attn_heads=16
+# global_batch_size=4
+# lr=3.0e-4
+# min_lr=1.0e-6
+# init_std=0.018
 
 ## GPT-3 Large 760M
 # model_size=0.76
@@ -177,8 +177,8 @@ batch_size=$(( ${global_batch_size} / ${dp_size} ))
 ### MOE configs
 EP_SIZE=128
 
-if [[ $EP_SIZE -gt $NUM_GPUS ]]; then
-    EP_PARALLEL_SIZE=$NUM_GPUS
+if [[ $EP_SIZE -gt $num_gpus ]]; then
+    EP_PARALLEL_SIZE=$num_gpus
 else
     EP_PARALLEL_SIZE=$EP_SIZE
 fi
@@ -186,6 +186,8 @@ MOE_TRAIN_CAP_FACTOR=1.0
 MOE_EVAL_CAP_FACTOR=1.0
 MOE_MIN_CAP=4
 MOE_DROP_TOKEN="true"
+MLC=0.01
+
 # MOE_DROP_TOKEN="false"
 ###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
@@ -283,7 +285,7 @@ eval_interval=100
 num_save=100
 estimated_train_iter=$((${train_tokens} / ${seq_len} / ${global_batch_size}))
 # save_interval=$((${estimated_train_iter} / ${num_save}))
-save_interval=100
+save_interval=1
 
 ## Activation checkpointing saves GPU memory, but reduces training speed
 # activation_checkpoint="true"

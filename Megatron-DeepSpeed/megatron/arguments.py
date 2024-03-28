@@ -1070,6 +1070,7 @@ def _add_checkpointing_args(parser):
                        "initialization.")
     group.add_argument('--universal-checkpoint', action='store_true',
                         help='Loading a universal format checkpoint.')
+    # group.add_argument('--snapshot-enable-concurrency', action='store_true', help='Use a new stream and thread to make snapshot')
     return parser
 
 

@@ -37,14 +37,14 @@ seq_len=2048
 # init_std=0.02
 
 ## GPT-3 Medium 350M
-model_size=0.35
-num_layers=24
-hidden_size=1024
-num_attn_heads=16
-global_batch_size=24
-lr=3.0e-4
-min_lr=1.0e-6
-init_std=0.018
+# model_size=0.35
+# num_layers=24
+# hidden_size=1024
+# num_attn_heads=16
+# global_batch_size=24
+# lr=3.0e-4
+# min_lr=1.0e-6
+# init_std=0.018
 
 ## GPT-3 Large 760M
 # model_size=0.76
@@ -61,9 +61,8 @@ init_std=0.018
 # num_layers=24
 # hidden_size=2048
 # num_attn_heads=16
-# global_batch_size=512
-# # lr=2.0e-4
-# lr=$1
+# global_batch_size=20
+# lr=2.0e-4
 # min_lr=1.0e-6
 # init_std=0.013
 
@@ -72,20 +71,20 @@ init_std=0.018
 # num_layers=32
 # hidden_size=2560
 # num_attn_heads=32
-# global_batch_size=512
+# global_batch_size=8
 # lr=1.6e-4
 # min_lr=1.0e-6
 # init_std=0.011
 
 ## GPT-3 6.7B
-# model_size=6.7
-# num_layers=32
-# hidden_size=4096
-# num_attn_heads=32
-# global_batch_size=1024
-# lr=1.2e-4
-# min_lr=1.0e-6
-# init_std=0.009
+model_size=6.7
+num_layers=32
+hidden_size=4096
+num_attn_heads=32
+global_batch_size=1
+lr=1.2e-4
+min_lr=1.0e-6
+init_std=0.009
 
 ## GPT-3 13B
 # model_size=13
@@ -172,7 +171,7 @@ dp_size=1
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 ## Reduce it manually if GPU OOM
 batch_size=$(( ${global_batch_size} / ${dp_size} ))
-# echo "batch_size: $batch_size; dp_size: $dp_size"
+echo "batch_size: $batch_size"
 ###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
 ## random-LTD's main switch. "false" means disabled. "true" means enabled.
@@ -269,7 +268,7 @@ eval_interval=100
 num_save=100
 estimated_train_iter=$((${train_tokens} / ${seq_len} / ${global_batch_size}))
 # save_interval=$((${estimated_train_iter} / ${num_save}))
-save_interval=100
+save_interval=1
 
 ## Activation checkpointing saves GPU memory, but reduces training speed
 # activation_checkpoint="true"
@@ -346,8 +345,8 @@ output_home="${dir}/../output"
 log_path="${output_home}/log/"
 # checkpoint_path="${output_home}/checkpoint/${jobname}"
 # checkpoint_path="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/save"
-# checkpoint_path="/dev/shm/reft/save"
-checkpoint_path="${dir}/../save"
+checkpoint_path="/dev/shm/reft/save"
+# checkpoint_path="${dir}/../save"
 ## Microsoft internal constraint: because tensorboard is logged by last rank,
 ## it's better to put the path in NFS instead of Blob.
 # tensorboard_dir="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/tensorboard"
@@ -412,7 +411,7 @@ megatron_options=" \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard"
+    --log-validation-ppl-to-tensorboard" 
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
