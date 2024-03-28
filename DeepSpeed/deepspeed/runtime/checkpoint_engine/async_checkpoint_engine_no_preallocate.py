@@ -149,8 +149,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
         # if use_timer and step_cnt > 10:
         torch.cuda.set_device(device)
         logger.info(f"rank: {dist.get_rank()}, current_device: {torch.cuda.current_device()} in _snapshot_thread")
-        print("snapshot thread sleep")
-        print("snapshot thread wake up")
         start_time = time.perf_counter()
         self.make_snapshot_sync(state_dict, use_copy_, snapshot_stream, device, shard_info_dict)
         # if use_timer and step_cnt > 10:
