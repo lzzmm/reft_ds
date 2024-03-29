@@ -27,7 +27,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.thread_lock = threading.Lock()
         self.state_dict_cpu = {}
-        self.print_flag = True
+        self.print_flag = False
         
     def __update_cpu_buffer(self, state_dict, ckpt_args_dict):
         stack = [(state_dict, None, None)]
