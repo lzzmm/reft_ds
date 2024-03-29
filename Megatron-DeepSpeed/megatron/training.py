@@ -1193,7 +1193,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     """Train the model function."""
     args = get_args()
     timers = get_timers()
-    if args.data_parallel_size > 1:
+    if args.data_parallel_size > 1 and args.enable_sharding:
         assert args.num_layers % (args.data_parallel_size * (args.data_parallel_size - 1)) == 0
     args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M%S"))
     

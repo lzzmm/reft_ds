@@ -144,14 +144,14 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=4
+mp_size=2
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=1
-no_pp="true"
-# no_pp="false"
+pp_size=2
+# no_pp="true"
+no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=0
@@ -161,11 +161,11 @@ zero_stage=0
 # num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
-num_node=1
-num_gpus=4
+num_node=2
+num_gpus=8
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=1
+dp_size=2
 
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -414,11 +414,9 @@ megatron_options=" \
     --log-validation-ppl-to-tensorboard \
     --checkpoint-new-thread \
     --checkpoint-new-stream \
-    --double-checkpoint \
-    --enable-parity \
     --enable-pin-memory \
-    --enable-sharding \
-    --enable-profile" 
+    --enable-profile \
+    --enable-sharding" 
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
@@ -563,5 +561,5 @@ if [[ $iteration -gt 0 ]]; then
 fi
 # export NCCL_DEBUG=INFO
 # deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
-# deepspeed --hostfile=hostfile --include=10.120.20.165:4,5,6,7@10.120.20.185:1,2,3,4  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-deepspeed --include localhost:4,5,6,7 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --hostfile=hostfile --include=10.120.20.161:4,5,6,7@10.120.20.185:0,1,2,3  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+# deepspeed --include localhost:4,5,6,7 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
