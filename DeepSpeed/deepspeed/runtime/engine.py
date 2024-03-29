@@ -85,7 +85,7 @@ from deepspeed.runtime.data_pipeline.data_routing.scheduler import RandomLTDSche
 from deepspeed.runtime.data_pipeline.data_routing.helper import remove_random_ltd_state_dict
 from deepspeed.runtime.data_pipeline.data_routing.basic_layer import RandomLayerTokenDrop
 # self modified
-from deepspeed.runtime.checkpoint_engine.async_checkpoint_engine_no_preallocate import AsyncCheckpointEngine
+from deepspeed.runtime.checkpoint_engine.async_checkpoint_engine import AsyncCheckpointEngine
 from deepspeed.runtime.checkpoint_engine.torch_checkpoint_engine import TorchCheckpointEngine
 from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
 
@@ -3034,7 +3034,7 @@ class DeepSpeedEngine(Module):
                 logger.warning(msg)
 
     # self modified
-    def save_checkpoint(self, save_dir, tag=None, client_state={}, save_latest=True, exclude_frozen_parameters=False, shard_info_dict={}, snapshot_stream=None):
+    def save_checkpoint(self, save_dir, tag=None, client_state={}, save_latest=True, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None):
         """Save training checkpoint
 
         Arguments:
@@ -3080,7 +3080,7 @@ class DeepSpeedEngine(Module):
             self._save_moe_checkpoint(save_dir,
                                       tag,
                                       client_state=client_state,
-                                      exclude_frozen_parameters=exclude_frozen_parameters, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                                      exclude_frozen_parameters=exclude_frozen_parameters, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
 
         # We distribute the task of saving layer checkpoint files among
         # data parallel instances, so all procs should call _save_checkpoint.
@@ -3091,11 +3091,11 @@ class DeepSpeedEngine(Module):
             self._save_checkpoint(save_dir,
                                   tag,
                                   client_state=client_state,
-                                  exclude_frozen_parameters=exclude_frozen_parameters, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                                  exclude_frozen_parameters=exclude_frozen_parameters, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
 
         if self.save_zero_checkpoint:
             self._create_zero_checkpoint_files(save_dir, tag)
-            self._save_zero_checkpoint(save_dir, tag, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+            self._save_zero_checkpoint(save_dir, tag, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
 
         if self._optimizer_has_ckpt_event_epilogue():
             self.optimizer.checkpoint_event_epilogue()
@@ -3121,7 +3121,7 @@ class DeepSpeedEngine(Module):
         return full_state_dict
 
     # self modified
-    def _save_moe_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, shard_info_dict={}, snapshot_stream=None):
+    def _save_moe_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None):
         save_path = self._get_ckpt_name(save_dir, tag)
         # A hack to save the checkpointing directory. Pipeline parallelism overrides
         # module_state_dict() and uses this path to save the model. module_state_dict()
@@ -3172,7 +3172,7 @@ class DeepSpeedEngine(Module):
                     moe_save_path = self._get_expert_ckpt_name(save_dir, moe_layer_id, global_expert_id, tag, self.mpu)
                     if self.random_ltd_enabled():
                         expert_state_dict = remove_random_ltd_state_dict(expert_state_dict)
-                    self.checkpoint_engine.save(expert_state_dict, moe_save_path, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                    self.checkpoint_engine.save(expert_state_dict, moe_save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
                 moe_layer_id += 1
 
         self._curr_ckpt_path = os.path.join(save_dir, tag)
@@ -3193,7 +3193,7 @@ class DeepSpeedEngine(Module):
         }
         # TODO: why use BufferedWriter not the path
         file_path = self._get_optimizer_ckpt_name(save_dir, tag, expp_rank)
-        self.checkpoint_engine.save(optimizer_state, file_path, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+        self.checkpoint_engine.save(optimizer_state, file_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
 
         # get non-moe parameters
         model_state_dict = self._get_non_moe_state_dict(
@@ -3228,7 +3228,7 @@ class DeepSpeedEngine(Module):
             }
             state.update(client_state)
             logger.info(f'Saving model checkpoint: {save_path}')
-            self.checkpoint_engine.save(state, save_path, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+            self.checkpoint_engine.save(state, save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
         self._curr_save_path = None
 
     def _create_checkpoint_file(self, save_dir, tag, zero_checkpoint):
@@ -3255,7 +3255,7 @@ class DeepSpeedEngine(Module):
         return success
 
     # self modified
-    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, shard_info_dict={}, snapshot_stream=None):
+    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None):
 
         save_path = self._get_ckpt_name(save_dir, tag)
 
@@ -3298,7 +3298,7 @@ class DeepSpeedEngine(Module):
         log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
         if isinstance(self.checkpoint_engine, AsyncCheckpointEngine):
             print("checkpoint_engine type: AsyncCheckpointEngine")
-            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
         else:
             print("checkpoint_engine type: torchCheckpoint")
             self.checkpoint_engine.save(state, save_path)
@@ -3445,10 +3445,10 @@ class DeepSpeedEngine(Module):
             )
 
     # self modified
-    def _save_zero_checkpoint(self, save_path, tag, shard_info_dict={}, snapshot_stream=None):
+    def _save_zero_checkpoint(self, save_path, tag, ckpt_args_dict={}, snapshot_stream=None):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
-        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
 
         if self.global_rank == 0:
             self._copy_recovery_script(save_path)

@@ -81,7 +81,7 @@ model_size=6.7
 num_layers=32
 hidden_size=4096
 num_attn_heads=32
-global_batch_size=1
+global_batch_size=4
 lr=1.2e-4
 min_lr=1.0e-6
 init_std=0.009
@@ -411,7 +411,14 @@ megatron_options=" \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard" 
+    --log-validation-ppl-to-tensorboard \
+    --checkpoint-new-thread \
+    --checkpoint-new-stream \
+    --double-checkpoint \
+    --enable-parity \
+    --enable-pin-memory \
+    --enable-sharding \
+    --enable-profile" 
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"

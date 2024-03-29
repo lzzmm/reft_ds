@@ -1070,7 +1070,16 @@ def _add_checkpointing_args(parser):
                        "initialization.")
     group.add_argument('--universal-checkpoint', action='store_true',
                         help='Loading a universal format checkpoint.')
-    # group.add_argument('--snapshot-enable-concurrency', action='store_true', help='Use a new stream and thread to make snapshot')
+    group.add_argument('--checkpoint-new-thread', action='store_true', help="Use a new thread to do checkpoint.")
+    group.add_argument('--checkpoint-new-stream', action='store_true', help="Use a new stream to do checkpoint.")
+    group.add_argument('--double-checkpoint', action='store_true', help="Checkpoint twice.")
+    group.add_argument('--enable-parity', action='store_true', help="Enable parity for checkpoint.")
+    group.add_argument('--enable-pin-memory', action='store_true', help="Use pin memory when snapshotting.")
+    group.add_argument('--enable-sharding', action='store_true', help="Enable sharding for checkpoint.")
+    group.add_argument('--save-embeddings', action='store_true', help="Save embeddings in checkpoint.")
+    group.add_argument('--enable-profile', action='store_true', help="Enable profiling.")
+    group.add_argument('--enable-save', action='store_true', help="Enable save.")
+    
     return parser
 
 

@@ -238,16 +238,24 @@ def pretrain(train_valid_test_dataset_provider,
             model = [redundancy_clean(model[0], args.deepspeed_config_dict, mpu)]
 
         if args.save and iteration != 0:
-            shard_info_dict = {}
-            shard_info_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
-            shard_info_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
-            shard_info_dict['data_parallel_size'] = args.data_parallel_size
-            shard_info_dict['world_size'] = args.world_size
-            shard_info_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
-            shard_info_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
-            shard_info_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
-            shard_info_dict['num_layers'] = args.num_layers
-            save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+            ckpt_args_dict = {}
+            ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
+            ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
+            ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
+            ckpt_args_dict['world_size'] = args.world_size
+            ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
+            ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
+            ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
+            ckpt_args_dict['num_layers'] = args.num_layers
+            ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
+            ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
+            ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
+            ckpt_args_dict['enable_parity'] = args.enable_parity
+            ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
+            ckpt_args_dict['enable_sharding'] = args.enable_sharding
+            ckpt_args_dict['save_embeddings'] = args.save_embeddings
+            ckpt_args_dict['enable_save'] = args.enable_save
+            save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
     else:
         print_rank_0('skipping training (--skip-train is on) ...')
 
@@ -689,7 +697,7 @@ def setup_model_and_optimizer(model_provider_func,
 
 
 def train_step(forward_step_func, data_iterator,
-               model, optimizer, opt_param_scheduler, config):
+               model, optimizer, opt_param_scheduler, config, iteration, snapshot_stream):
     """Single training step."""
     args = get_args()
     timers = get_timers()
@@ -1167,13 +1175,13 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
     return report_memory_flag
 
 
-def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, shard_info_dict={}, snapshot_stream=None):
-    assert shard_info_dict != {}
+def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict={}, snapshot_stream=None):
+    assert ckpt_args_dict != {}
     timers = get_timers()
     # Extra barrier is added to make sure
     # all ranks report the max time.
     timers('save-checkpoint', log_level=0).start(barrier=True)
-    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
     timers('save-checkpoint').stop(barrier=True)
     checkpoint_throughput_calculator(model, timers('save-checkpoint').elapsed(reset=False))
     timers.log(['save-checkpoint'])
@@ -1202,7 +1210,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         yield None
     
 
-    prof_train = True
+    prof_train = args.enable_profile
     
     if prof_train:
         profiler_context = torch.profiler.profile(
@@ -1284,7 +1292,9 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                         model,
                         optimizer,
                         opt_param_scheduler,
-                        config)
+                        config,
+                        iteration, 
+                        snapshot_stream)
                 iteration += 1
                 args.iteration = iteration
                 new_samples = mpu.get_data_parallel_world_size() * \
@@ -1345,28 +1355,36 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     
                 
                 # print data_parallel_rank, pipeline_model_parallel_rank, tensor_model_parallel_rank, data_parallel_size, pipeline_model_parallel_size, tensor_model_parallel_size, world_size
-                torch.cuda.synchronize()
-                shard_info_dict = {}
-                shard_info_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
-                shard_info_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
-                shard_info_dict['data_parallel_size'] = args.data_parallel_size
-                shard_info_dict['world_size'] = args.world_size
-                shard_info_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
-                shard_info_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
-                shard_info_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
-                shard_info_dict['num_layers'] = args.num_layers
-                enable_prealloc = False
+                # torch.cuda.synchronize()
+                ckpt_args_dict = {}
+                ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
+                ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
+                ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
+                ckpt_args_dict['world_size'] = args.world_size
+                ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
+                ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
+                ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
+                ckpt_args_dict['num_layers'] = args.num_layers
+                ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
+                ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
+                ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
+                ckpt_args_dict['enable_parity'] = args.enable_parity
+                ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
+                ckpt_args_dict['enable_sharding'] = args.enable_sharding
+                ckpt_args_dict['save_embeddings'] = args.save_embeddings
+                ckpt_args_dict['enable_save'] = args.enable_save
+                enable_prealloc = True
                 # Temp for test by yuhan 24/03/2024
                 if enable_prealloc:
-                    shard_info_dict['pre_alloc'] = True
-                    shard_info_dict['init_cpu_buffer'] = True if iteration <= 1 and shard_info_dict['pre_alloc'] == True else False
+                    ckpt_args_dict['pre_alloc'] = True
+                    ckpt_args_dict['init_cpu_buffer'] = True if iteration <= 1 and ckpt_args_dict['pre_alloc'] == True else False
                     
                     # Build CPU Buffer for async D2H cudaMemcpy
-                    if shard_info_dict['init_cpu_buffer'] == True: 
+                    if ckpt_args_dict['init_cpu_buffer'] == True: 
                         # This call save_checkpoint in checkpointing.py
                         # get state_dict for init cpu buffer but won't save
-                        # cuz shard_info_dict['init_cpu_buffer'] = True
-                        save_checkpoint(iteration, model, optimizer, opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                        # cuz ckpt_args_dict['init_cpu_buffer'] = True
+                        save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
                 
                 # Checkpointing
                 saved_checkpoint = False
@@ -1374,7 +1392,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     signal_handler = get_signal_handler()
                     if any(signal_handler.signals_received()):
                         save_checkpoint_and_time(iteration, model, optimizer,
-                                                opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                                                opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
                         print_datetime('exiting program after receiving SIGTERM.')
                         sys.exit()
 
@@ -1382,7 +1400,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                 iteration % args.save_interval == 0:
                     # with record_function("save_checkpoint"):
                     save_checkpoint_and_time(iteration, model, optimizer,
-                                            opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                                            opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
                     saved_checkpoint = True
                     
 
@@ -1397,16 +1415,16 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     if done:
                         if not saved_checkpoint:
                             save_checkpoint_and_time(iteration, model, optimizer,
-                                                    opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                                                    opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
                         print_datetime('exiting program after {} minutes'.format(train_time))
                         sys.exit()
 
                 # Exiting based on iterations
-                # print rank and shard_info_dict
+                # print rank and ckpt_args_dict
                 if args.exit_interval and iteration % args.exit_interval == 0:
                     if args.save and not saved_checkpoint:
                         save_checkpoint_and_time(iteration, model, optimizer,
-                                                opt_param_scheduler, shard_info_dict=shard_info_dict, snapshot_stream=snapshot_stream)
+                                                opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
                     torch.distributed.barrier()
                     print_datetime('exiting program at iteration {}'.format(iteration))
                     sys.exit()
