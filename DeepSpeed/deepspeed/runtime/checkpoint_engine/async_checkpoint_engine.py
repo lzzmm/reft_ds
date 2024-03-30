@@ -37,16 +37,21 @@ class AsyncCheckpointEngine(CheckpointEngine):
         while stack:
             current, parent, key = stack.pop()
             if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
+                # print("isinstance torch.Tensor")
                 if not ckpt_args_dict['save_embeddings']:
+                    # print("not ckpt_args_dict['save_embeddings']")
                     if not self.is_encoder_layer(key, ckpt_args_dict):
+                        # print("not self.is_encoder_layer(key, ckpt_args_dict)")
                         continue
                     if ckpt_args_dict['enable_sharding']:
                         if not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers):
+                            # print("not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers)")
                             continue
                 else:
                     if ckpt_args_dict['enable_sharding']:
                         if self.is_encoder_layer(key, ckpt_args_dict):
                             if not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers):
+                                # print("ckpt_args_dict['save_embeddings'] not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers)")
                                 continue
                         
                 cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
@@ -206,7 +211,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         start_time = time.perf_counter()
         snapshot_size = self._make_snapshot(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict)
         end_time = time.perf_counter()
-        print(f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}")
+        print(f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size}, snapshot_speed: {snapshot_size / (end_time - start_time)}")
 
  
     def get_shard_layers(self, ckpt_args_dict):
@@ -352,6 +357,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             stack = [(data, cpu_buffers, None)]
             shard_layers = self.get_shard_layers(ckpt_args_dict)
             snapshot_size = 0
+            # log_dist(f"data {data} \n cpu_buffers {cpu_buffers}", ranks=[0])
             while stack:
                 current, cpu_buffer, key = stack.pop()
                 if key is not None:
@@ -405,6 +411,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     else:
                         cpu_buffer = cpu_buffer[key]
                 if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
+                    # print("in prealloc")
                     if not ckpt_args_dict['save_embeddings']:
                         if not self.is_encoder_layer(key, ckpt_args_dict):
                             continue
@@ -430,6 +437,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 else:
                     pass
                     # print("not dict or list", type(current))
+            # print("snapshot_size", snapshot_size)
             return snapshot_size
         # timestamp = datetime.now().strftime('%H:%M:%S:%X')
         # print(f"[{timestamp}][{device}] start _prepare_cpu_buffers")

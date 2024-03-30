@@ -95,4 +95,5 @@ Megatron-DeepSpeed/examples_deepspeed/**/save*/
 Megatron-DeepSpeed/examples_deepspeed/**/ds_config_gbs*
 Megatron-DeepSpeed/examples_deepspeed/**/info/
 Megatron-DeepSpeed/examples_deepspeed/**/trace/
+Megatron-DeepSpeed/examples_deepspeed/**/job.*.out
 my_test

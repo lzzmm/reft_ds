@@ -255,6 +255,7 @@ def pretrain(train_valid_test_dataset_provider,
             ckpt_args_dict['enable_sharding'] = args.enable_sharding
             ckpt_args_dict['save_embeddings'] = args.save_embeddings
             ckpt_args_dict['enable_save'] = args.enable_save
+            ckpt_args_dict['pre_alloc'] = True
             save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
     else:
         print_rank_0('skipping training (--skip-train is on) ...')

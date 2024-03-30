@@ -415,7 +415,6 @@ megatron_options=" \
     --checkpoint-new-thread \
     --checkpoint-new-stream \
     --enable-pin-memory \
-    --enable-profile \
     --enable-sharding" 
 
 if [[ -n "${checkpoint_path}" ]]; then
