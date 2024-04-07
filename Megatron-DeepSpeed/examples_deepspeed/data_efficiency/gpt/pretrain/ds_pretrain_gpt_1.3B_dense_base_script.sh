@@ -27,14 +27,14 @@ seq_len=2048
 # init_std=0.02
 
 # GPT-3 Small 125M
-# model_size=0.125
-# num_layers=12
-# hidden_size=768
-# num_attn_heads=12
-# global_batch_size=256
-# lr=6.0e-4
-# min_lr=1.0e-6
-# init_std=0.02
+model_size=0.125
+num_layers=12
+hidden_size=768
+num_attn_heads=12
+global_batch_size=4
+lr=6.0e-4
+min_lr=1.0e-6
+init_std=0.02
 
 ## GPT-3 Medium 350M
 # model_size=0.35
@@ -77,21 +77,21 @@ seq_len=2048
 # init_std=0.011
 
 ## GPT-3 6.7B
-model_size=6.7
-num_layers=32
-hidden_size=4096
-num_attn_heads=32
-global_batch_size=4
-lr=1.2e-4
-min_lr=1.0e-6
-init_std=0.009
+# model_size=6.7
+# num_layers=32
+# hidden_size=4096
+# num_attn_heads=32
+# global_batch_size=4
+# lr=1.2e-4
+# min_lr=1.0e-6
+# init_std=0.009
 
 ## GPT-3 13B
 # model_size=13
 # num_layers=40
 # hidden_size=5120
 # num_attn_heads=40
-# global_batch_size=1024
+# global_batch_size=8
 # lr=1.0e-4
 # min_lr=1.0e-6
 # init_std=0.008
@@ -119,7 +119,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=30
+train_iters=5
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -144,14 +144,14 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=4
+mp_size=1
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=1
-no_pp="true"
-# no_pp="false"
+pp_size=2
+# no_pp="true"
+no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=0
@@ -162,7 +162,7 @@ zero_stage=0
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
 num_node=1
-num_gpus=4
+num_gpus=2
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
 dp_size=1
@@ -258,7 +258,7 @@ cl_2nd_root=${27:-1}
 # cl_2nd_root=1
 ###############################################################################
 ### Misc configs
-log_interval=10
+log_interval=1
 # eval_iters=10
 eval_iters=0
 eval_interval=100
@@ -279,7 +279,7 @@ activation_checkpoint="false"
 log_optimizer_state="true"
 ###############################################################################
 ### Output and data configs
-current_time=$(date "+%Y.%m.%d_%H.%M.%S")
+current_time=$(date "+%Y.%m.%d_%H.%M")
 host="${HOSTNAME}"
 seed=1234
 num_workers=0
@@ -339,13 +339,31 @@ if [ "${cl_enabled}" = "true" ]; then
 fi
 
 username=$(whoami)
+checkpoint_new_thread="true"
+checkpoint_new_stream="true"
+double_checkpoint="false"
+enable_parity="false"
+enable_pin_memory="true"
+enable_sharding="true"
+save_embeddings="true"
+enable_profile="false"
+enable_save="false"
+save_location="nfs"
+enable_snapshot="true"
+prealloc="true"
+pure_torch_save="false"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
-log_path="${output_home}/log/"
+log_path="${output_home}/log/${current_time}"
+mkdir -p ${log_path}
 # checkpoint_path="${output_home}/checkpoint/${jobname}"
 # checkpoint_path="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/save"
-checkpoint_path="/dev/shm/reft/save"
+if [ "${save_location}" == "tmpfs" ]; then
+    checkpoint_path="/dev/shm/reft/save"
+else
+    checkpoint_path="${dir}/../save"
+fi
 # checkpoint_path="${dir}/../save"
 ## Microsoft internal constraint: because tensorboard is logged by last rank,
 ## it's better to put the path in NFS instead of Blob.
@@ -366,6 +384,8 @@ if [ "${cl_enabled}" = "true" ]; then
     data_cluster_path="${output_home}/data_cluster/${jobname}"
     mkdir -p ${data_cluster_path}
 fi
+
+
 
 ###############################################################################
 data_options=" \
@@ -411,12 +431,83 @@ megatron_options=" \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard \
-    --checkpoint-new-thread \
-    --checkpoint-new-stream \
-    --enable-pin-memory \
-    --enable-profile \
-    --enable-sharding" 
+    --log-validation-ppl-to-tensorboard"
+
+if [ "${checkpoint_new_thread}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --checkpoint-new-thread"
+fi
+
+if [ "${checkpoint_new_stream}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --checkpoint-new-stream"
+fi
+
+if [ "${double_checkpoint}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --double-checkpoint"
+fi
+
+if [ "${enable_parity}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --enable-parity"
+fi
+
+if [ "${enable_pin_memory}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --enable-pin-memory"
+fi
+
+if [ "${enable_sharding}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --enable-sharding"
+fi
+
+if [ "${save_embeddings}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --save-embeddings"
+fi
+
+if [ "${enable_profile}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --enable-profile"
+fi
+
+if [ "${enable_save}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --enable-save"
+    megatron_options="${megatron_options} \
+        --save-location ${save_location}"
+fi
+
+if [ "${enable_snapshot}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --enable-snapshot"
+fi
+
+if [ "${prealloc}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --prealloc"
+fi
+
+if [ "${pure_torch_save}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --pure-torch-save"
+fi
+
+
+log_args="checkpoint_new_thread_${checkpoint_new_thread}\ncheckpoint_new_stream_${checkpoint_new_stream}\ndouble_checkpoint_${double_checkpoint}\nenable_parity_${enable_parity}\nenable_pin_memory_${enable_pin_memory}\nenable_sharding_${enable_sharding}\nsave_embeddings_${save_embeddings}\nenable_profile_${enable_profile}\nenable_save_${enable_save}\nprealloc_${prealloc}\nenable_snapshot_${enable_snapshot}\nnum_node_${num_node}\nnum_gpus_${num_gpus}\nglobal_batch_size_${global_batch_size}\nbatch_size_${batch_size}"
+
+
+if [ "${enable_save}" = "true" ]; then
+    log_args="${log_args}\nsave_location_${save_location}"
+fi
+
+if [ "${pure_torch_save}" = "true" ]; then
+    log_args="${log_args}\npure_torch_save_${pure_torch_save}"
+fi
+
+echo -e ${log_args} > ${log_path}/log_args.txt
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
@@ -562,4 +653,9 @@ fi
 # export NCCL_DEBUG=INFO
 # deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
 # deepspeed --hostfile=hostfile --include=10.120.20.161:4,5,6,7@10.120.20.185:0,1,2,3  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-deepspeed --include localhost:1,5,6,7 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+# JOB_ID=1010
+# HOST_NODE_ADDR=10.120.20.180
+# export CUDA_VISIBLE_DEVICES=4,5,6,7
+# torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --include=localhost:6,7 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+# deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log

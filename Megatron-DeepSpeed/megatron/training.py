@@ -255,7 +255,10 @@ def pretrain(train_valid_test_dataset_provider,
             ckpt_args_dict['enable_sharding'] = args.enable_sharding
             ckpt_args_dict['save_embeddings'] = args.save_embeddings
             ckpt_args_dict['enable_save'] = args.enable_save
-            ckpt_args_dict['pre_alloc'] = True
+            ckpt_args_dict['pre_alloc'] = args.prealloc
+            ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
+            ckpt_args_dict['save_location'] = args.save_location
+            ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
             save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
     else:
         print_rank_0('skipping training (--skip-train is on) ...')
@@ -820,6 +823,44 @@ def train_step(forward_step_func, data_iterator,
             return loss_reduced, skipped_iter, grad_norm, num_zeros_in_grad
     return {}, skipped_iter, grad_norm, num_zeros_in_grad
 
+def print_throughput(total_loss_dict, iteration, model=None):
+    timers = get_timers()
+    args=get_args()
+    elapsed_time = timers('interval-time').elapsed(barrier=True)
+    advanced_iters_key = 'advanced iterations'
+    skipped_iters_key = 'skipped iterations'
+    total_iterations = total_loss_dict[advanced_iters_key] + \
+                       total_loss_dict[skipped_iters_key]
+    elapsed_time_per_iteration = elapsed_time / total_iterations
+    seq_len = args.seq_length
+    if hasattr(args, 'actual_seq_length'):
+        seq_len = args.actual_seq_length
+    samples_per_sec, tflops, approx_parameters_in_billions = throughput_calculator(
+        model,
+        args,
+        elapsed_time,
+        total_iterations
+    )
+    samples_per_sec_per_replica = samples_per_sec / args.data_parallel_size
+    tokens_per_sec = samples_per_sec * seq_len
+    tokens_per_sec_per_replica = tokens_per_sec / args.data_parallel_size
+    tokens_per_gpu_per_second = tokens_per_sec / args.world_size
+    tokens_per_gpu_per_second_per_replica = tokens_per_gpu_per_second / args.data_parallel_size
+    throughput_metrics = {
+        'throughput/iteration-time': elapsed_time_per_iteration,  # 1000 ms / s
+        'throughput/samples_per_sec': samples_per_sec,
+        'throughput/samples_per_sec_per_replica': samples_per_sec_per_replica,
+        'throughput/tokens_per_sec': tokens_per_sec,
+        'throughput/tokens_per_sec_per_replica': tokens_per_sec_per_replica,
+        'throughput/tokens_per_gpu_per_sec': tokens_per_gpu_per_second,
+        'throughput/tokens_per_gpu_per_sec_per_replica': tokens_per_gpu_per_second_per_replica,
+        'throughput/tflops': tflops,
+        'throughput/approx_params_in_billions': approx_parameters_in_billions,
+        'throughput/elapsed_ms_per_iteration': elapsed_time_per_iteration,
+        'throughput/iteration': iteration,
+    }
+    print("iteration", iteration, "throughput_metrics", throughput_metrics)
+        
 
 def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                  loss_scale, report_memory_flag, skipped_iter,
@@ -1080,6 +1121,20 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         tokens_per_sec_per_replica = tokens_per_sec / args.data_parallel_size
         tokens_per_gpu_per_second = tokens_per_sec / args.world_size
         tokens_per_gpu_per_second_per_replica = tokens_per_gpu_per_second / args.data_parallel_size
+        throughput_metrics = {
+            'throughput/iteration-time': elapsed_time_per_iteration,  # 1000 ms / s
+            'throughput/samples_per_sec': samples_per_sec,
+            'throughput/samples_per_sec_per_replica': samples_per_sec_per_replica,
+            'throughput/tokens_per_sec': tokens_per_sec,
+            'throughput/tokens_per_sec_per_replica': tokens_per_sec_per_replica,
+            'throughput/tokens_per_gpu_per_sec': tokens_per_gpu_per_second,
+            'throughput/tokens_per_gpu_per_sec_per_replica': tokens_per_gpu_per_second_per_replica,
+            'throughput/tflops': tflops,
+            'throughput/approx_params_in_billions': approx_parameters_in_billions,
+            'throughput/elapsed_ms_per_iteration': elapsed_time_per_iteration,
+            'throughput/iteration': iteration,
+        }
+        print("throughput_metrics", throughput_metrics)
         if wandb is not None and getattr(wandb, 'run', None) is not None:
             assert wandb.run is not None
             wandb_metrics = {
@@ -1194,13 +1249,15 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     """Train the model function."""
     args = get_args()
     timers = get_timers()
-    if args.data_parallel_size > 1 and args.enable_sharding:
+    if args.data_parallel_size > 1 and args.enable_sharding and args.enable_parity:
         assert args.num_layers % (args.data_parallel_size * (args.data_parallel_size - 1)) == 0
-    args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M%S"))
+    args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
     
     def trace_handler(p):
-        time_stamp = datetime.now().strftime("%m%d-%H%M%S")
-        trace_dir = os.path.join(args.save, "trace_training")
+        trace_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/trace"
+        time_stamp = datetime.now().strftime("%m%d-%H%M")
+        trace_dir = os.path.join(trace_dir, time_stamp)
+        # trace_dir = os.path.join(args.save, "trace_training")
         os.makedirs(trace_dir, exist_ok=True)
         trace_file = os.path.join(trace_dir, f"{dist.get_rank()}_{time_stamp}_trace.json")
         print("trace_file", trace_file)
@@ -1262,180 +1319,184 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         args.random_ltd_layer_num = model[0].random_ltd_scheduler.get_random_ltd_layer_num()
 
 
-    if prof_train:
-        with profiler_context as p:
-            while iteration < args.train_iters and (args.train_tokens is None or \
-                args.consumed_train_tokens < args.train_tokens):
-                
-                update_num_microbatches(args.consumed_train_samples)
-                
-                start_time = time.perf_counter()
+    with profiler_context as p:
+        while iteration < args.train_iters and (args.train_tokens is None or \
+            args.consumed_train_tokens < args.train_tokens):
+            
+            update_num_microbatches(args.consumed_train_samples)
+            
+            start_time = time.perf_counter()
 
-                if args.deepspeed:
-                    # inform deepspeed of any batch size changes
-                    global_batch_size = mpu.get_data_parallel_world_size() * \
+            if args.deepspeed:
+                # inform deepspeed of any batch size changes
+                global_batch_size = mpu.get_data_parallel_world_size() * \
+                                    args.micro_batch_size * \
+                                    get_num_microbatches()
+                model[0].set_train_batch_size(global_batch_size)
+
+            if args.curriculum_learning_legacy and not args.no_pipeline_parallel:
+                curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
+                        args.iteration + 1)
+                if iteration == 0 or curriculum_seqlen != args.curriculum_seqlen:
+                    if args.use_rotary_position_embeddings:
+                        update_rotary_pos_emb(curriculum_seqlen)
+                args.curriculum_seqlen = curriculum_seqlen
+            args.curr_iteration = iteration
+
+            loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
+            train_step(forward_step_func,
+                    train_data_iterator,
+                    model,
+                    optimizer,
+                    opt_param_scheduler,
+                    config,
+                    iteration, 
+                    snapshot_stream)
+            iteration += 1
+            args.iteration = iteration
+            new_samples = mpu.get_data_parallel_world_size() * \
                                         args.micro_batch_size * \
                                         get_num_microbatches()
-                    model[0].set_train_batch_size(global_batch_size)
-
-                if args.curriculum_learning_legacy and not args.no_pipeline_parallel:
-                    curriculum_seqlen = args.curriculum_scheduler.update_difficulty( \
-                            args.iteration + 1)
-                    if iteration == 0 or curriculum_seqlen != args.curriculum_seqlen:
-                        if args.use_rotary_position_embeddings:
-                            update_rotary_pos_emb(curriculum_seqlen)
-                    args.curriculum_seqlen = curriculum_seqlen
-                args.curr_iteration = iteration
-
-                loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
-                train_step(forward_step_func,
-                        train_data_iterator,
-                        model,
-                        optimizer,
-                        opt_param_scheduler,
-                        config,
-                        iteration, 
-                        snapshot_stream)
-                iteration += 1
-                args.iteration = iteration
-                new_samples = mpu.get_data_parallel_world_size() * \
-                                            args.micro_batch_size * \
-                                            get_num_microbatches()
-                args.consumed_train_samples += new_samples
-                # This actual_seq_length is used for actual consumed tokens calculation, flops calculation, and logging.
-                args.actual_seq_length = args.seq_length
-                if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
-                    args.actual_seq_length = args.curriculum_seqlen
-                if args.random_ltd:
-                    args.random_ltd_reserved_length = model[0].random_ltd_scheduler.get_current_seq()
-                    if args.random_ltd_reserved_length < args.actual_seq_length:
-                        args.actual_seq_length = (args.actual_seq_length * (args.num_layers - args.random_ltd_layer_num) + args.random_ltd_reserved_length * args.random_ltd_layer_num) // args.num_layers
-                if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
-                    if hasattr(args, 'data_efficiency_curriculum_learning_numel'):
-                        act_mbsz = args.data_efficiency_curriculum_learning_numel / args.curriculum_seqlen
-                        act_token = act_mbsz * args.actual_seq_length
-                        args.consumed_train_tokens += mpu.get_data_parallel_world_size() * \
-                                get_num_microbatches() * act_token
-                    else:
-                        args.consumed_train_tokens += new_samples * args.actual_seq_length
+            args.consumed_train_samples += new_samples
+            # This actual_seq_length is used for actual consumed tokens calculation, flops calculation, and logging.
+            args.actual_seq_length = args.seq_length
+            if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
+                args.actual_seq_length = args.curriculum_seqlen
+            if args.random_ltd:
+                args.random_ltd_reserved_length = model[0].random_ltd_scheduler.get_current_seq()
+                if args.random_ltd_reserved_length < args.actual_seq_length:
+                    args.actual_seq_length = (args.actual_seq_length * (args.num_layers - args.random_ltd_layer_num) + args.random_ltd_reserved_length * args.random_ltd_layer_num) // args.num_layers
+            if args.curriculum_learning_legacy or args.data_efficiency_curriculum_learning:
+                if hasattr(args, 'data_efficiency_curriculum_learning_numel'):
+                    act_mbsz = args.data_efficiency_curriculum_learning_numel / args.curriculum_seqlen
+                    act_token = act_mbsz * args.actual_seq_length
+                    args.consumed_train_tokens += mpu.get_data_parallel_world_size() * \
+                            get_num_microbatches() * act_token
                 else:
                     args.consumed_train_tokens += new_samples * args.actual_seq_length
-                
-                # Logging.
-                if args.deepspeed:
-                    if hasattr(model[0].optimizer, 'cur_scale'):
-                        loss_scale = model[0].optimizer.cur_scale
-                    else:
-                        loss_scale = None
+            else:
+                args.consumed_train_tokens += new_samples * args.actual_seq_length
+            
+            # Logging.
+            if args.deepspeed:
+                if hasattr(model[0].optimizer, 'cur_scale'):
+                    loss_scale = model[0].optimizer.cur_scale
                 else:
-                    loss_scale = optimizer.get_loss_scale().item()
-                params_norm = None
-                if args.log_params_norm:
-                    params_norm = calc_params_l2_norm(model)
-                report_memory_flag = training_log(loss_dict, total_loss_dict,
-                                                optimizer.param_groups[0]['lr'],
-                                                iteration, loss_scale,
-                                                report_memory_flag, skipped_iter,
-                                                grad_norm, params_norm, num_zeros_in_grad,
-                                                model, optimizer)
+                    loss_scale = None
+            else:
+                loss_scale = optimizer.get_loss_scale().item()
+            params_norm = None
+            if args.log_params_norm:
+                params_norm = calc_params_l2_norm(model)
+            report_memory_flag = training_log(loss_dict, total_loss_dict,
+                                            optimizer.param_groups[0]['lr'],
+                                            iteration, loss_scale,
+                                            report_memory_flag, skipped_iter,
+                                            grad_norm, params_norm, num_zeros_in_grad,
+                                            model, optimizer)
+            # print_throughput(total_loss_dict, iteration, model)
+            
+            # Autoresume
+            if args.adlr_autoresume and \
+            (iteration % args.adlr_autoresume_interval == 0):
+                check_adlr_autoresume_termination(iteration, model, optimizer,
+                                                opt_param_scheduler)
 
-                # Autoresume
-                if args.adlr_autoresume and \
-                (iteration % args.adlr_autoresume_interval == 0):
-                    check_adlr_autoresume_termination(iteration, model, optimizer,
-                                                    opt_param_scheduler)
-
-                # Evaluation
-                if args.eval_interval and iteration % args.eval_interval == 0 and \
-                args.do_valid:
-                    prefix = 'iteration {}'.format(iteration)
-                    evaluate_and_print_results(prefix, forward_step_func,
-                                            valid_data_iterator, model,
-                                            iteration, process_non_loss_data_func,
-                                            config, False)
-                    
+            # Evaluation
+            if args.eval_interval and iteration % args.eval_interval == 0 and \
+            args.do_valid:
+                prefix = 'iteration {}'.format(iteration)
+                evaluate_and_print_results(prefix, forward_step_func,
+                                        valid_data_iterator, model,
+                                        iteration, process_non_loss_data_func,
+                                        config, False)
                 
-                # print data_parallel_rank, pipeline_model_parallel_rank, tensor_model_parallel_rank, data_parallel_size, pipeline_model_parallel_size, tensor_model_parallel_size, world_size
-                # torch.cuda.synchronize()
-                ckpt_args_dict = {}
-                ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
-                ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
-                ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
-                ckpt_args_dict['world_size'] = args.world_size
-                ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
-                ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
-                ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
-                ckpt_args_dict['num_layers'] = args.num_layers
-                ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
-                ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
-                ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
-                ckpt_args_dict['enable_parity'] = args.enable_parity
-                ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
-                ckpt_args_dict['enable_sharding'] = args.enable_sharding
-                ckpt_args_dict['save_embeddings'] = args.save_embeddings
-                ckpt_args_dict['enable_save'] = args.enable_save
-                enable_prealloc = True
-                # Temp for test by yuhan 24/03/2024
-                if enable_prealloc:
-                    ckpt_args_dict['pre_alloc'] = True
-                    ckpt_args_dict['init_cpu_buffer'] = True if iteration <= 1 and ckpt_args_dict['pre_alloc'] == True else False
-                    
-                    # Build CPU Buffer for async D2H cudaMemcpy
-                    if ckpt_args_dict['init_cpu_buffer'] == True: 
-                        # This call save_checkpoint in checkpointing.py
-                        # get state_dict for init cpu buffer but won't save
-                        # cuz ckpt_args_dict['init_cpu_buffer'] = True
-                        save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+        
+            # print data_parallel_rank, pipeline_model_parallel_rank, tensor_model_parallel_rank, data_parallel_size, pipeline_model_parallel_size, tensor_model_parallel_size, world_size
+            # torch.cuda.synchronize()
+            ckpt_args_dict = {}
+            ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
+            ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
+            ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
+            ckpt_args_dict['world_size'] = args.world_size
+            ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
+            ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
+            ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
+            ckpt_args_dict['num_layers'] = args.num_layers
+            ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
+            ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
+            ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
+            ckpt_args_dict['enable_parity'] = args.enable_parity
+            ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
+            ckpt_args_dict['enable_sharding'] = args.enable_sharding
+            ckpt_args_dict['save_embeddings'] = args.save_embeddings
+            ckpt_args_dict['enable_save'] = args.enable_save
+            ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
+            ckpt_args_dict['save_location'] = args.save_location
+            ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
+            enable_prealloc = args.prealloc
+            
+            # Temp for test by yuhan 24/03/2024
+            if enable_prealloc:
+                ckpt_args_dict['pre_alloc'] = True
+                ckpt_args_dict['init_cpu_buffer'] = True if iteration <= 1 and ckpt_args_dict['pre_alloc'] == True else False
                 
-                # Checkpointing
-                saved_checkpoint = False
-                if args.exit_signal_handler:
-                    signal_handler = get_signal_handler()
-                    if any(signal_handler.signals_received()):
-                        save_checkpoint_and_time(iteration, model, optimizer,
-                                                opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
-                        print_datetime('exiting program after receiving SIGTERM.')
-                        sys.exit()
-
-                if args.save and args.save_interval and \
-                iteration % args.save_interval == 0:
-                    # with record_function("save_checkpoint"):
+                # Build CPU Buffer for async D2H cudaMemcpy
+                if ckpt_args_dict['init_cpu_buffer'] == True: 
+                    # This call save_checkpoint in checkpointing.py
+                    # get state_dict for init cpu buffer but won't save
+                    # cuz ckpt_args_dict['init_cpu_buffer'] = True
+                    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+            
+            # Checkpointing
+            saved_checkpoint = False
+            if args.exit_signal_handler:
+                signal_handler = get_signal_handler()
+                if any(signal_handler.signals_received()):
                     save_checkpoint_and_time(iteration, model, optimizer,
                                             opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
-                    saved_checkpoint = True
-                    
+                    print_datetime('exiting program after receiving SIGTERM.')
+                    sys.exit()
 
-                # Exiting based on duration
-                if args.exit_duration_in_mins:
-                    train_time = (time.time() - _TRAIN_START_TIME) / 60.0
-                    done_cuda = get_accelerator().IntTensor(
-                        [train_time > args.exit_duration_in_mins])
-                    torch.distributed.all_reduce(
-                        done_cuda, op=torch.distributed.ReduceOp.MAX)
-                    done = done_cuda.item()
-                    if done:
-                        if not saved_checkpoint:
-                            save_checkpoint_and_time(iteration, model, optimizer,
-                                                    opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
-                        print_datetime('exiting program after {} minutes'.format(train_time))
-                        sys.exit()
+            if args.save and args.save_interval and \
+            iteration % args.save_interval == 0:
+                # with record_function("save_checkpoint"):
+                save_checkpoint_and_time(iteration, model, optimizer,
+                                        opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                saved_checkpoint = True
+                
 
-                # Exiting based on iterations
-                # print rank and ckpt_args_dict
-                if args.exit_interval and iteration % args.exit_interval == 0:
-                    if args.save and not saved_checkpoint:
+            # Exiting based on duration
+            if args.exit_duration_in_mins:
+                train_time = (time.time() - _TRAIN_START_TIME) / 60.0
+                done_cuda = get_accelerator().IntTensor(
+                    [train_time > args.exit_duration_in_mins])
+                torch.distributed.all_reduce(
+                    done_cuda, op=torch.distributed.ReduceOp.MAX)
+                done = done_cuda.item()
+                if done:
+                    if not saved_checkpoint:
                         save_checkpoint_and_time(iteration, model, optimizer,
                                                 opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
-                    torch.distributed.barrier()
-                    print_datetime('exiting program at iteration {}'.format(iteration))
+                    print_datetime('exiting program after {} minutes'.format(train_time))
                     sys.exit()
-                
-                
-                end_time = time.perf_counter()
-                print(f"dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()} iter {iteration} time: {end_time - start_time}\n")
-                
-                if prof_train:
-                    p.step()
+
+            # Exiting based on iterations
+            # print rank and ckpt_args_dict
+            if args.exit_interval and iteration % args.exit_interval == 0:
+                if args.save and not saved_checkpoint:
+                    save_checkpoint_and_time(iteration, model, optimizer,
+                                            opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                torch.distributed.barrier()
+                print_datetime('exiting program at iteration {}'.format(iteration))
+                sys.exit()
+            
+            
+            end_time = time.perf_counter()
+            print(f"dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()} iter {iteration} time: {end_time - start_time}\n")
+            
+            if prof_train:
+                p.step()
     return iteration
 
 

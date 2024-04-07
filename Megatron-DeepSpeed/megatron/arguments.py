@@ -1079,7 +1079,10 @@ def _add_checkpointing_args(parser):
     group.add_argument('--save-embeddings', action='store_true', help="Save embeddings in checkpoint.")
     group.add_argument('--enable-profile', action='store_true', help="Enable profiling.")
     group.add_argument('--enable-save', action='store_true', help="Enable save.")
-    
+    group.add_argument('--save-location', type=str, default=None, help="Save location.")
+    group.add_argument('--enable-snapshot', action='store_true', help="Enable snapshot.")
+    group.add_argument('--prealloc', action='store_true', help="Preallocate memory for checkpoint.")
+    group.add_argument('--pure-torch-save', action='store_true', help="Use pure torch save.")
     return parser
 
 
