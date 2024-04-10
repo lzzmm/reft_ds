@@ -1083,6 +1083,7 @@ def _add_checkpointing_args(parser):
     group.add_argument('--enable-snapshot', action='store_true', help="Enable snapshot.")
     group.add_argument('--prealloc', action='store_true', help="Preallocate memory for checkpoint.")
     group.add_argument('--pure-torch-save', action='store_true', help="Use pure torch save.")
+    group.add_argument('--get-state-dict-shape', action='store_true', help="Get state dict shape.")
     return parser
 
 

@@ -259,6 +259,7 @@ def pretrain(train_valid_test_dataset_provider,
             ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
             ckpt_args_dict['save_location'] = args.save_location
             ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
+            ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
             save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
     else:
         print_rank_0('skipping training (--skip-train is on) ...')
@@ -1434,6 +1435,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
             ckpt_args_dict['save_location'] = args.save_location
             ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
+            ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
             enable_prealloc = args.prealloc
             
             # Temp for test by yuhan 24/03/2024
@@ -1447,6 +1449,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     # get state_dict for init cpu buffer but won't save
                     # cuz ckpt_args_dict['init_cpu_buffer'] = True
                     save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                    if args.get_state_dict_shape:
+                        sys.exit()
             
             # Checkpointing
             saved_checkpoint = False

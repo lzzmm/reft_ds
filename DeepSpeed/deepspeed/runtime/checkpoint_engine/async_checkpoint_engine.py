@@ -28,7 +28,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.thread_lock = threading.Lock()
         self.state_dict_cpu = {}
-        self.print_flag = True
+        self.print_flag = False
         
     def __update_cpu_buffer(self, state_dict, ckpt_args_dict):
         stack = [(state_dict, None, None)]
@@ -58,11 +58,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                             if not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers):
                                 # print("ckpt_args_dict['save_embeddings'] not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers)")
                                 continue
-                        
-                if ckpt_args_dict['enable_pin_memory']:
-                    cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
-                else:
-                    cpu_buffer = torch.empty_like(current, device='cpu')
+                if ckpt_args_dict['get_state_dict_shape']:
+                    cpu_buffer = current.shape
+                else: 
+                    if ckpt_args_dict['enable_pin_memory']:
+                        cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
+                    else:
+                        cpu_buffer = torch.empty_like(current, device='cpu')
+
                 if parent is not None:
                     parent[key] = cpu_buffer
                 else:
@@ -92,6 +95,12 @@ class AsyncCheckpointEngine(CheckpointEngine):
 
     def _init_cpu_buffer(self, state_dict, ckpt_args_dict):
         self.__update_cpu_buffer(state_dict, ckpt_args_dict)
+        if ckpt_args_dict['get_state_dict_shape']:
+            timestamp = datetime.now().strftime('%m%d-%H%M')
+            info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/state_dict_shape"
+            info_path = os.path.join(info_dir, f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_state_dict_shape.txt")
+            with open(info_path, "w") as f:
+                f.write(str(self.state_dict_cpu))
         logger.info(f"[AsyncCkpt] CPU buffer initialized.")
 
     def create(self, tag):
@@ -425,7 +434,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
         return snapshot_size
     
     def _make_snapshot(self, state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict):
-                        
         if ckpt_args_dict['checkpoint_new_stream']:
             snapshot_stream.wait_stream(torch.cuda.default_stream(device))
             with torch.cuda.stream(snapshot_stream):

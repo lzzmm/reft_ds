@@ -149,9 +149,9 @@ mp_size=1
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=1
-no_pp="true"
-# no_pp="false"
+pp_size=2
+# no_pp="true"
+no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=0
@@ -161,12 +161,12 @@ zero_stage=0
 # num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
-num_node=2
+num_node=1
 num_gpus=2
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=2
+dp_size=1
 
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -346,13 +346,14 @@ double_checkpoint="false"
 enable_parity="false"
 enable_pin_memory="true"
 enable_sharding="true"
-save_embeddings="true"
+save_embeddings="false"
 enable_profile="false"
 enable_save="false"
 save_location="nfs"
 enable_snapshot="true"
 prealloc="true"
 pure_torch_save="false"
+get_state_dict_shape="false"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -494,6 +495,11 @@ fi
 if [ "${pure_torch_save}" = "true" ]; then
     megatron_options="${megatron_options} \
         --pure-torch-save"
+fi
+
+if [ "${get_state_dict_shape}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --get-state-dict-shape"
 fi
 
 
@@ -654,9 +660,9 @@ fi
 # export NCCL_DEBUG=INFO
 # deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
 # deepspeed --hostfile=hostfile --include=10.120.20.161:4,5,6,7@10.120.20.185:0,1,2,3  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-JOB_ID=1010
-HOST_NODE_ADDR=gpu1-19
-echo "hostname: $(hostname)"
+# JOB_ID=1010
+# HOST_NODE_ADDR=gpu1-19
+# echo "hostname: $(hostname)"
 # if [[ "$(hostname)" == "gpu1-19" ]]; then
 #     export CUDA_VISIBLE_DEVICES=0
 # elif [[ "$(hostname)" == "gpu1-23" ]]; then
@@ -666,7 +672,7 @@ echo "hostname: $(hostname)"
 #     exit 1
 
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
-torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+# torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile --include="gpu1-19:0@gpu1-23:1" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
