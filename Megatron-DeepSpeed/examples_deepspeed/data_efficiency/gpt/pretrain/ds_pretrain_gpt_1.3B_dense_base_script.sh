@@ -119,7 +119,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=5
+train_iters=2
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -149,9 +149,9 @@ mp_size=1
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=2
-# no_pp="true"
-no_pp="false"
+pp_size=1
+no_pp="true"
+# no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=0
@@ -166,7 +166,7 @@ num_gpus=2
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=1
+dp_size=2
 
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -259,7 +259,7 @@ cl_2nd_root=${27:-1}
 # cl_2nd_root=1
 ###############################################################################
 ### Misc configs
-log_interval=1
+log_interval=100
 # eval_iters=10
 eval_iters=0
 eval_interval=100
@@ -433,7 +433,8 @@ megatron_options=" \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard"
+    --log-validation-ppl-to-tensorboard \
+    --info-zero-stage ${zero_stage}" 
 
 if [ "${checkpoint_new_thread}" = "true" ]; then
     megatron_options="${megatron_options} \
@@ -673,6 +674,6 @@ fi
 
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+deepspeed --include="localhost:2,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile --include="gpu1-19:0@gpu1-23:1" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log

@@ -1,5 +1,6 @@
 # lzzmm
 
+import sys
 import torch
 import torch.distributed
 from deepspeed.utils import logger, log_dist
@@ -18,6 +19,7 @@ from torch.profiler import profile, record_function
 import torch.distributed as dist
 from multiprocessing import Process
 import time
+import math
 
 
    
@@ -30,41 +32,37 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.state_dict_cpu = {}
         self.print_flag = False
         
+    def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
+        # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
+        # Then pad it to the uniform size, and send this shard back
+        # We don't need to locate the shard, we just need to find out the size.
+        original_shape = tensor.shape
+        new_dim_0_size = math.ceil(original_shape[0] / (chunk_num * (chunk_num - 1))) * (chunk_num - 1)
+        new_shape = (new_dim_0_size, *original_shape[1:])
+        return torch.empty(new_shape, device='cpu')
+        
     def __update_cpu_buffer(self, state_dict, ckpt_args_dict):
-        stack = [(state_dict, None, None)]
+        stack = [(state_dict, None, None, None)]
         # self.state_dict_cpu = None
         # timestamp = datetime.now().strftime('%m%d-%H%M')
-        shard_layers = self.get_shard_layers(ckpt_args_dict)
+        # shard_layers = self.get_shard_layers(ckpt_args_dict)
         # info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
         # info_path = os.path.join(info_dir, f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_state_dict_for_init.txt")
         # with open(info_path, "w") as f:
         #     f.write(str(state_dict))
         while stack:
-            current, parent, key = stack.pop()
+            current, parent, key, tag = stack.pop()
             if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                # print("isinstance torch.Tensor")
-                if not ckpt_args_dict['save_embeddings']:
-                    # print("not ckpt_args_dict['save_embeddings']")
-                    if not self.is_encoder_layer(key, ckpt_args_dict):
-                        # print("not self.is_encoder_layer(key, ckpt_args_dict)")
-                        continue
-                    if ckpt_args_dict['enable_sharding']:
-                        if not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers):
-                            # print("not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers)")
-                            continue
-                else:
-                    if ckpt_args_dict['enable_sharding']:
-                        if self.is_encoder_layer(key, ckpt_args_dict):
-                            if not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers):
-                                # print("ckpt_args_dict['save_embeddings'] not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers)")
-                                continue
+                if ckpt_args_dict['info_zero_stage'] != 0 and tag == "optimizer": 
+                    continue
                 if ckpt_args_dict['get_state_dict_shape']:
                     cpu_buffer = current.shape
                 else: 
+                    chunk_num = ckpt_args_dict["data_parallel_size"]
                     if ckpt_args_dict['enable_pin_memory']:
-                        cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
+                        cpu_buffer = self.get_tensor_shard_cpu_buffer(current, chunk_num).pin_memory()
                     else:
-                        cpu_buffer = torch.empty_like(current, device='cpu')
+                        cpu_buffer = self.get_tensor_shard_cpu_buffer(current, chunk_num)
 
                 if parent is not None:
                     parent[key] = cpu_buffer
@@ -72,8 +70,13 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     self.state_dict_cpu = cpu_buffer
             elif isinstance(current, dict):
                 cpu_data = {}
+                if type(key) == str:
+                    if "embedding" in key:
+                        tag = "embedding"
+                    if "optimizer" == key:
+                        tag = "optimizer"
                 for k, v in current.items():
-                    stack.append((v, cpu_data, k))
+                    stack.append((v, cpu_data, k, tag))
                 if parent is not None:
                     parent[key] = cpu_data
                 else:
@@ -81,7 +84,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             elif isinstance(current, list):
                 cpu_data = [None] * len(current)
                 for idx, item in enumerate(current):
-                    stack.append((item, cpu_data, idx))
+                    stack.append((item, cpu_data, idx, tag))
                 if parent is not None:
                     parent[key] = cpu_data
                 else:
@@ -108,21 +111,21 @@ class AsyncCheckpointEngine(CheckpointEngine):
 
     def save(self, state_dict, path: str, device='cuda:0', snapshot_=True, use_copy_=True, snapshot_stream=torch.cuda.Stream(torch.cuda.current_device()), parity_stream=torch.cuda.Stream(), ckpt_args_dict={}):
         # Prepare cpu buffer if ckpt_args_dict['init_cpu_buffer'] = True
+        
         if not ckpt_args_dict['enable_snapshot']:
             return
         
         if 'init_cpu_buffer' in ckpt_args_dict and ckpt_args_dict['init_cpu_buffer'] == True:
-            buffer_init_thread = threading.Thread(
-                target=self._init_cpu_buffer,
-                args=(state_dict, ckpt_args_dict)
-            )
-            buffer_init_thread.start()
+            # buffer_init_thread = threading.Thread(
+            #     target=self._init_cpu_buffer,
+            #     args=(state_dict, ckpt_args_dict)
+            # )
+            # buffer_init_thread.start()
+            self._init_cpu_buffer(state_dict, ckpt_args_dict)
             # self.__update_cpu_buffer(state_dict)
             return
-        
-
         timestamp = datetime.now().strftime('%m%d-%H%M')
-        print(f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_{device} save checkpoint")
+        print(f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} save checkpoint")
         # time stamp with month day hour minute second
         if self.print_flag:
             info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
@@ -133,6 +136,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             with open(state_dict_cpu_path, "w") as f:
                 f.write(str(self.state_dict_cpu))
             self.print_flag = False
+            sys.exit()
         assert ckpt_args_dict != {}
         self.path = path
         self.make_snapshot(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict)
@@ -232,7 +236,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def _snapshot_thread(self, state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict):
         # if use_timer and step_cnt > 10:
         torch.cuda.set_device(device)
-        time.sleep(0.8)
+        # time.sleep(0.8)
         start_time = time.perf_counter()
         if ckpt_args_dict['pure_torch_save']:
             torch.save(state_dict, self.path)
@@ -388,44 +392,57 @@ class AsyncCheckpointEngine(CheckpointEngine):
         # TODO: update cpu buffers if key error bug fix
         # if ckpt_args_dict['pipeline_model_parallel_rank'] == 1:
         #     print(data, cpu_buffers)
-        stack = [(state_dict, state_dict_buffer, None)]
-        shard_layers = self.get_shard_layers(ckpt_args_dict)
+        stack = [(state_dict, state_dict_buffer, None, None)]
         snapshot_size = 0
         # log_dist(f"data {data} \n cpu_buffers {cpu_buffers}", ranks=[0])
         while stack:
-            current, cpu_buffer, key = stack.pop()
+            current, cpu_buffer, key, tag = stack.pop()
             if key is not None:
                 if (isinstance(cpu_buffer, dict) and key not in cpu_buffer) or (isinstance(cpu_buffer, list) and key >= len(cpu_buffer)):
                     if isinstance(current, torch.Tensor):
-                        if not ckpt_args_dict['save_embeddings']:
-                            if not self.is_encoder_layer(key, ckpt_args_dict):
-                                continue
-                            if ckpt_args_dict['enable_sharding']:
-                                if not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers):
-                                    continue
-                        else:
-                            if ckpt_args_dict['enable_sharding']:
-                                if self.is_encoder_layer(key, ckpt_args_dict):
-                                    if not self.is_snapshot_shard_tensor(key, ckpt_args_dict, shard_layers):
-                                        continue
+                        if ckpt_args_dict['info_zero_stage'] != 0 and tag == "optimizer":
+                            continue
                     if torch.distributed.get_rank() == 1:
-                        print("current", current)
-                        print("cpu_buffer", cpu_buffer, "type", type(cpu_buffer))
-                        print("key", key)
+                        print(f"current: {current}")
+                        if isinstance(cpu_buffer, dict):
+                            print(f"cpu_buffer: {cpu_buffer.keys()}")
+                        print(f"key: {key}")
                     raise KeyError(f"key {key} not in cpu_buffer")
                 else:
                     cpu_buffer = cpu_buffer[key]
+            
             if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-                
+                if ckpt_args_dict['info_zero_stage'] != 0 and tag == "optimizer":
+                    continue
                 if cpu_buffer.device.type == 'cpu':
-                    snapshot_size += current.element_size() * current.numel()
-                    cpu_buffer.copy_(current, non_blocking=True)
+                    
+                    # I need to locate the correct position of the shard
+                    # and copy pad it to the correct size
+                    # then copy the shard to the cpu_buffer
+                    shard_dim_0_size = cpu_buffer.shape[0]
+                    shard_id = ckpt_args_dict["data_parallel_rank"]
+                    # There are 3 possibilities
+                    if (shard_id + 1) * shard_dim_0_size <= current.shape[0]:
+                        shard = current[shard_id * shard_dim_0_size : (shard_id + 1) * shard_dim_0_size]
+                    else:
+                        if shard_id * shard_dim_0_size < current.shape[0]:
+                            shard = current[shard_id * shard_dim_0_size :]
+                            shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device='cuda')), dim=0)
+                        else:
+                            shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
+                    snapshot_size += shard.element_size() * shard.numel()
+                    cpu_buffer.copy_(shard, non_blocking=True)
             elif isinstance(current, dict):
+                if type(key) == str:
+                    if "embedding" in key:
+                        tag = "embedding"
+                    if "optimizer" == key:
+                        tag = "optimizer"
                 for k, v in current.items():
-                    stack.append((v, cpu_buffer, k))
+                    stack.append((v, cpu_buffer, k, tag))
             elif isinstance(current, list):
                 for idx, item in enumerate(current):
-                    stack.append((item, cpu_buffer, idx))
+                    stack.append((item, cpu_buffer, idx, tag))
             else:
                 cpu_buffer = current
                 # pass

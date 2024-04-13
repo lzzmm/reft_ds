@@ -237,30 +237,34 @@ def pretrain(train_valid_test_dataset_provider,
         if args.compression_training:
             model = [redundancy_clean(model[0], args.deepspeed_config_dict, mpu)]
 
-        if args.save and iteration != 0:
-            ckpt_args_dict = {}
-            ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
-            ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
-            ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
-            ckpt_args_dict['world_size'] = args.world_size
-            ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
-            ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
-            ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
-            ckpt_args_dict['num_layers'] = args.num_layers
-            ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
-            ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
-            ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
-            ckpt_args_dict['enable_parity'] = args.enable_parity
-            ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
-            ckpt_args_dict['enable_sharding'] = args.enable_sharding
-            ckpt_args_dict['save_embeddings'] = args.save_embeddings
-            ckpt_args_dict['enable_save'] = args.enable_save
-            ckpt_args_dict['pre_alloc'] = args.prealloc
-            ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
-            ckpt_args_dict['save_location'] = args.save_location
-            ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
-            ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
-            save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+        # Modified, remove the checkpoint at the end of training, just do the checkpoint inside 
+        # function train
+        
+        # if args.save and iteration != 0:
+        #     ckpt_args_dict = {}
+        #     ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
+        #     ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
+        #     ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
+        #     ckpt_args_dict['world_size'] = args.world_size
+        #     ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
+        #     ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
+        #     ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
+        #     ckpt_args_dict['num_layers'] = args.num_layers
+        #     ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
+        #     ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
+        #     ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
+        #     ckpt_args_dict['enable_parity'] = args.enable_parity
+        #     ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
+        #     ckpt_args_dict['enable_sharding'] = args.enable_sharding
+        #     ckpt_args_dict['save_embeddings'] = args.save_embeddings
+        #     ckpt_args_dict['enable_save'] = args.enable_save
+        #     ckpt_args_dict['pre_alloc'] = args.prealloc
+        #     ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
+        #     ckpt_args_dict['save_location'] = args.save_location
+        #     ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
+        #     ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
+        #     ckpt_args_dict['info_zero_stage'] = args.info_zero_stage
+        #     save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
     else:
         print_rank_0('skipping training (--skip-train is on) ...')
 
@@ -1436,6 +1440,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             ckpt_args_dict['save_location'] = args.save_location
             ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
             ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
+            ckpt_args_dict['info_zero_stage'] = args.info_zero_stage
             enable_prealloc = args.prealloc
             
             # Temp for test by yuhan 24/03/2024
@@ -1449,6 +1454,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     # get state_dict for init cpu buffer but won't save
                     # cuz ckpt_args_dict['init_cpu_buffer'] = True
                     save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                    ckpt_args_dict['init_cpu_buffer'] = False
                     if args.get_state_dict_shape:
                         sys.exit()
             

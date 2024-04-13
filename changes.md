@@ -1,3 +1,9 @@
+# 4.13 Shard with padding implemented.
+- The sharding logic in `async_checkpoint_engine.py` has been modified to shard and separate every tensor to each rank, rather than the previous method to separate and designate layers to each rank.
+
+# 4.10
+- Move the layer-sharding-implementation of checkpoint engine to the `bak.py` file. 
+
 # 4.10 add get_state_dict_shape
 - Before adding the function of chunking snapshotted tensors, I'd like to get the information of all the shapes of state_dict's tensors first.
 - I add a argument to specify if this running would get the state_dict shape or not. If yes, then in `async_checkpoint_engine.py/__update_cpu_buffer`, `current.shape` rather than `current`'s cpu tensor will added into `cpu_buffer`. So the `self.state_dict_cpu`

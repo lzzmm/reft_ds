@@ -1084,6 +1084,7 @@ def _add_checkpointing_args(parser):
     group.add_argument('--prealloc', action='store_true', help="Preallocate memory for checkpoint.")
     group.add_argument('--pure-torch-save', action='store_true', help="Use pure torch save.")
     group.add_argument('--get-state-dict-shape', action='store_true', help="Get state dict shape.")
+    group.add_argument('--info-zero-stage', type=int, default=0, help="Zero stage information")
     return parser
 
 
