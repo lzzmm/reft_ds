@@ -1,3 +1,7 @@
+# 4.13 Attach original shape to tensor in cpu buffer
+- When loading checkpoint with sharding tensors, it needs to know the original shape of the tensor, so that it can remove the paddings. 
+- It's not easy to get this shape from `model`. So we attach this shape to the tensors in the cpu buffer.
+
 # 4.13 stack pop modified
 - Modify `async_checkpoint_engine.py`, the `stack.pop` logic in both prealloc and copy is modified to `stack.pop(0)` to ensure the sequence of elements in the saved state dict is identical to the original state dict.
 

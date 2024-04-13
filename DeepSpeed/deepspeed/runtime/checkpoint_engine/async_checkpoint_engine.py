@@ -65,9 +65,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         cpu_buffer = self.get_tensor_shard_cpu_buffer(current, chunk_num)
 
                 if parent is not None:
-                    parent[key] = cpu_buffer
+                    parent[key] = (cpu_buffer, current.shape)
                 else:
-                    self.state_dict_cpu = cpu_buffer
+                    self.state_dict_cpu = (cpu_buffer, current.shape)
             elif isinstance(current, dict):
                 cpu_data = {}
                 if type(key) == str:
@@ -415,12 +415,12 @@ class AsyncCheckpointEngine(CheckpointEngine):
             if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
                 if ckpt_args_dict['info_zero_stage'] != 0 and tag == "optimizer":
                     continue
-                if cpu_buffer.device.type == 'cpu':
+                if cpu_buffer[0].device.type == 'cpu':
                     
                     # I need to locate the correct position of the shard
                     # and copy pad it to the correct size
                     # then copy the shard to the cpu_buffer
-                    shard_dim_0_size = cpu_buffer.shape[0]
+                    shard_dim_0_size = cpu_buffer[0].shape[0]
                     shard_id = ckpt_args_dict["data_parallel_rank"]
                     # There are 3 possibilities
                     if (shard_id + 1) * shard_dim_0_size <= current.shape[0]:
@@ -432,7 +432,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         else:
                             shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
                     snapshot_size += shard.element_size() * shard.numel()
-                    cpu_buffer.copy_(shard, non_blocking=True)
+                    cpu_buffer[0].copy_(shard, non_blocking=True)
             elif isinstance(current, dict):
                 if type(key) == str:
                     if "embedding" in key:

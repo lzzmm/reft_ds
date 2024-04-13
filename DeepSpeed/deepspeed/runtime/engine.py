@@ -2740,6 +2740,8 @@ class DeepSpeedEngine(Module):
                 self.update_optimizer_step(step=client_states['iteration'] + 1)
 
         return load_path, client_states
+    
+    
 
     def _load_checkpoint(self,
                          load_dir,
@@ -2749,6 +2751,52 @@ class DeepSpeedEngine(Module):
                          load_lr_scheduler_states=True,
                          load_module_only=False,
                          custom_load_fn=None):
+        def gather_complete_state_dict(state_dict, dp_group, dp_size):
+            stack = [(state_dict, None, None, None)]
+            root = None
+            while stack:
+                current, parent, key, tag = stack.pop(0)
+                if isinstance(current, tuple) and isinstance(current[0], torch.Tensor) and current[0].device.type == 'cuda':
+                    # All-gather other shards, and concat them to a complete tensor
+                    shard = current[0]
+                    original_size = current[1]
+                    shard_list = [torch.zeros_like(shard, device=torch.cuda.current_device()) for _ in range(dp_size)]
+                    dist.all_gather(shard_list, shard, group=dp_group)
+                    complete_tensor = torch.cat(shard_list, dim=0)
+                    original_tensor = complete_tensor.narrow(0, 0, original_size)
+                    if parent is not None:
+                        parent[key] = original_tensor
+                    else:
+                        root = original_tensor
+                elif isinstance(current, dict):
+                    buffer = {}
+                    if type(key) == str:
+                        if "embedding" in key:
+                            tag = "embedding"
+                        if "optimizer" == key:
+                            tag = "optimizer"
+                    for k, v in current.items():
+                        stack.append((v, buffer, k, tag))
+                    if parent is not None:
+                        parent[key] = buffer
+                    else:
+                        root = buffer
+                elif isinstance(current, list):
+                    buffer = [None] * len(current)
+                    for idx, item in enumerate(current):
+                        stack.append((item, buffer, idx, tag))
+                    if parent is not None:
+                        parent[key] = buffer
+                    else:
+                        root = buffer
+                else:
+                    if parent is not None:
+                        parent[key] = None # wait for copy
+                        # parent[key] = current
+                    else:
+                        root = current
+                        
+            return root
 
         from deepspeed.runtime.state_dict_factory import SDLoaderFactory
 
@@ -2788,23 +2836,27 @@ class DeepSpeedEngine(Module):
         if not self.load_universal_checkpoint():
             try:
                 dp_group = self.mpu.get_data_parallel_group()
+                dp_size = self.mpu.get_data_parallel_world_size()
                 pipeline_parallel_size = self.mpu.get_pipeline_model_parallel_world_size()
             except:
                 dp_group = self.mpu.get_data_parallel_group()
+                dp_size = self.mpu.get_data_parallel_world_size()
                 pipeline_parallel_size = self.mpu.get_pipe_parallel_world_size()
-            if pipeline_parallel_size > 1:
-                snapshot_tensors_dict = checkpoint['module']
-            else:
-                snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
-            # logger.info(f"dp_rank: {self.mpu.get_data_parallel_rank()} pp_rank {self.mpu.get_pipe_parallel_rank()} tp_rank {self.mpu.get_slice_parallel_rank()} snapshot_tensors_dict before: {snapshot_tensors_dict.keys()}")
-            snapshot_tensors_dict_list = [None for _ in range(len(torch.distributed.get_process_group_ranks(dp_group)))]
+            # if pipeline_parallel_size > 1:
+            #     snapshot_tensors_dict = checkpoint['module']
+            # else:
+            #     snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
+            # # logger.info(f"dp_rank: {self.mpu.get_data_parallel_rank()} pp_rank {self.mpu.get_pipe_parallel_rank()} tp_rank {self.mpu.get_slice_parallel_rank()} snapshot_tensors_dict before: {snapshot_tensors_dict.keys()}")
+            # snapshot_tensors_dict_list = [None for _ in range(len(torch.distributed.get_process_group_ranks(dp_group)))]
             
-            dist.all_gather_object(snapshot_tensors_dict_list, snapshot_tensors_dict, group=dp_group)
+            # dist.all_gather_object(snapshot_tensors_dict_list, snapshot_tensors_dict, group=dp_group)
             
-            for gathered_snapshot_tensors_dict in snapshot_tensors_dict_list:
-                for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict.items():
-                    if snapshot_tensor_name not in snapshot_tensors_dict:
-                        snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
+            # for gathered_snapshot_tensors_dict in snapshot_tensors_dict_list:
+            #     for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict.items():
+            #         if snapshot_tensor_name not in snapshot_tensors_dict:
+            #             snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
+            
+            checkpoint = gather_complete_state_dict(checkpoint, dp_group, dp_size)
                         
             self.load_module_state_dict(checkpoint=checkpoint,
                                         strict=load_module_strict,
