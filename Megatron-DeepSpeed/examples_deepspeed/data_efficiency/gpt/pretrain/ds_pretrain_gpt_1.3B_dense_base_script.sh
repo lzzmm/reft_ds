@@ -348,7 +348,7 @@ enable_pin_memory="true"
 enable_sharding="true"
 save_embeddings="false"
 enable_profile="false"
-enable_save="false"
+enable_save="true"
 save_location="nfs"
 enable_snapshot="true"
 prealloc="true"
@@ -519,8 +519,8 @@ echo -e ${log_args} > ${log_path}/log_args.txt
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
-    # megatron_options+=" --load ${checkpoint_path}/0327-154112"
-    # megatron_options+=" --load-tag global_step30"
+    # megatron_options+=" --load ${checkpoint_path}/0413-2106"
+    # megatron_options+=" --load-tag global_step2"
 fi
 
 if [[ -n "${tensorboard_path}" ]]; then
@@ -674,6 +674,7 @@ fi
 
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+# deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --hostfile=hostfile --include="gpu1-19:0@gpu1-23:1" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log

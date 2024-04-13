@@ -1,3 +1,6 @@
+# 4.14 Tensor shard load implemented
+- The loading implementation corresponding to tensor shard has completed
+
 # 4.13 Attach original shape to tensor in cpu buffer
 - When loading checkpoint with sharding tensors, it needs to know the original shape of the tensor, so that it can remove the paddings. 
 - It's not easy to get this shape from `model`. So we attach this shape to the tensors in the cpu buffer.

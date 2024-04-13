@@ -31,6 +31,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.thread_lock = threading.Lock()
         self.state_dict_cpu = {}
         self.print_flag = False
+        self.init_buffer = True
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
         # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
@@ -91,7 +92,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     self.state_dict_cpu = cpu_data
             else:
                 if parent is not None:
-                    parent[key] = None # wait for copy
+                    parent[key] = current # wait for copy
                     # parent[key] = current
                 else:
                     self.state_dict_cpu = current
@@ -116,15 +117,16 @@ class AsyncCheckpointEngine(CheckpointEngine):
         if not ckpt_args_dict['enable_snapshot']:
             return
         
-        if 'init_cpu_buffer' in ckpt_args_dict and ckpt_args_dict['init_cpu_buffer'] == True:
+        if self.init_buffer == True:
             # buffer_init_thread = threading.Thread(
             #     target=self._init_cpu_buffer,
             #     args=(state_dict, ckpt_args_dict)
             # )
             # buffer_init_thread.start()
             self._init_cpu_buffer(state_dict, ckpt_args_dict)
+            self.init_buffer = False
             # self.__update_cpu_buffer(state_dict)
-            return
+
         timestamp = datetime.now().strftime('%m%d-%H%M')
         print(f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} save checkpoint")
         # time stamp with month day hour minute second
@@ -457,6 +459,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
             with torch.cuda.stream(snapshot_stream):
                 if 'pre_alloc' in ckpt_args_dict and ckpt_args_dict['pre_alloc'] == True:
                     snapshot_size = self._copy_tensors_to_cpu_buffers_prealloc(state_dict, self.state_dict_cpu, ckpt_args_dict)
+                    # timestamp = datetime.now().strftime('%m%d-%H%M')
+                    # info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+                    # info_path0 = os.path.join(info_dir, "saved_state_dict", f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_saved_state_dict.txt")
+                    # with open(info_path0, "w") as f:
+                    #     f.write(str(self.state_dict_cpu))
+                    # info_path1 = os.path.join(info_dir, "state_dict", f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_state_dict.txt")
+                    # with open(info_path1, "w") as f:
+                    #     f.write(str(state_dict))
                 else:
                     snapshot_size = self.state_dict_cpu = self._prepare_cpu_buffers(state_dict, ckpt_args_dict)
                     self._copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, ckpt_args_dict)

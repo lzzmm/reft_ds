@@ -22,6 +22,9 @@ from typing import Callable, Dict, Union, Iterable
 
 import deepspeed
 
+from datetime import datetime
+import sys
+
 from deepspeed import comm as dist
 from deepspeed.runtime.utils import see_memory_usage, DummyOptim
 from .zero.offload_config import OffloadDeviceEnum
@@ -2751,19 +2754,28 @@ class DeepSpeedEngine(Module):
                          load_lr_scheduler_states=True,
                          load_module_only=False,
                          custom_load_fn=None):
+        
         def gather_complete_state_dict(state_dict, dp_group, dp_size):
             stack = [(state_dict, None, None, None)]
+            device = torch.cuda.current_device()
             root = None
             while stack:
                 current, parent, key, tag = stack.pop(0)
-                if isinstance(current, tuple) and isinstance(current[0], torch.Tensor) and current[0].device.type == 'cuda':
+                if isinstance(current, tuple) and isinstance(current[0], torch.Tensor):
                     # All-gather other shards, and concat them to a complete tensor
-                    shard = current[0]
-                    original_size = current[1]
-                    shard_list = [torch.zeros_like(shard, device=torch.cuda.current_device()) for _ in range(dp_size)]
+                    # print(f"key: {key}")
+                    shard = current[0].to(device)
+                    # print(f"shard: {shard.shape}")
+                    original_size = current[1][0]
+                    shard_list = [torch.zeros_like(shard, device=device) for _ in range(dp_size)]
                     dist.all_gather(shard_list, shard, group=dp_group)
+                    # print("shard_list shape", [s.shape for s in shard_list])
                     complete_tensor = torch.cat(shard_list, dim=0)
+                    # print("complete_tensor shape", complete_tensor.shape)
                     original_tensor = complete_tensor.narrow(0, 0, original_size)
+                    # print("original_tensor shape", original_tensor.shape)
+                    
+                    # sys.exit()
                     if parent is not None:
                         parent[key] = original_tensor
                     else:
@@ -2791,7 +2803,7 @@ class DeepSpeedEngine(Module):
                         root = buffer
                 else:
                     if parent is not None:
-                        parent[key] = None # wait for copy
+                        parent[key] = current # wait for copy
                         # parent[key] = current
                     else:
                         root = current
@@ -2837,10 +2849,12 @@ class DeepSpeedEngine(Module):
             try:
                 dp_group = self.mpu.get_data_parallel_group()
                 dp_size = self.mpu.get_data_parallel_world_size()
+                dp_rank = self.mpu.get_data_parallel_rank()
                 pipeline_parallel_size = self.mpu.get_pipeline_model_parallel_world_size()
             except:
                 dp_group = self.mpu.get_data_parallel_group()
                 dp_size = self.mpu.get_data_parallel_world_size()
+                dp_rank = self.mpu.get_data_parallel_rank()
                 pipeline_parallel_size = self.mpu.get_pipe_parallel_world_size()
             # if pipeline_parallel_size > 1:
             #     snapshot_tensors_dict = checkpoint['module']
@@ -2855,9 +2869,17 @@ class DeepSpeedEngine(Module):
             #     for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict.items():
             #         if snapshot_tensor_name not in snapshot_tensors_dict:
             #             snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
-            
+            # timestamp = datetime.now().strftime('%m%d-%H%M')
+            # info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+            # info_path0 = os.path.join(info_dir, "all_gather", f"{timestamp}_dp_{dp_rank}_before_all_gather_state_dict.txt")
+            # with open(info_path0, "w") as f:
+            #     f.write(str(checkpoint))
+            # sys.exit()    
             checkpoint = gather_complete_state_dict(checkpoint, dp_group, dp_size)
-                        
+            # info_path1 = os.path.join(info_dir, "all_gather", f"{timestamp}_dp_{dp_rank}_after_all_gather_state_dict.txt")
+            # with open(info_path1, "w") as f:
+            #     f.write(str(checkpoint))
+            # sys.exit()            
             self.load_module_state_dict(checkpoint=checkpoint,
                                         strict=load_module_strict,
                                         custom_load_fn=custom_load_fn,

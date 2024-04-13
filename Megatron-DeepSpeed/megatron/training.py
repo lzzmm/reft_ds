@@ -679,7 +679,7 @@ def setup_model_and_optimizer(model_provider_func,
             args.iteration = load_checkpoint(model, optimizer, opt_param_scheduler)
             timers('load-checkpoint').stop(barrier=True)
             timers.log(['load-checkpoint'])
-            # exit()
+            # sys.exit()
         else:
             args.iteration = 0
     else:
@@ -1441,20 +1441,20 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
             ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
             ckpt_args_dict['info_zero_stage'] = args.info_zero_stage
-            enable_prealloc = args.prealloc
+            ckpt_args_dict['pre_alloc'] = args.prealloc
             
             # Temp for test by yuhan 24/03/2024
-            if enable_prealloc:
-                ckpt_args_dict['pre_alloc'] = True
-                ckpt_args_dict['init_cpu_buffer'] = True if iteration <= 1 and ckpt_args_dict['pre_alloc'] == True else False
+            # if enable_prealloc:
+            #     ckpt_args_dict['pre_alloc'] = True
+            #     ckpt_args_dict['init_cpu_buffer'] = True if iteration <= 1 and ckpt_args_dict['pre_alloc'] == True else False
                 
-                # Build CPU Buffer for async D2H cudaMemcpy
-                if ckpt_args_dict['init_cpu_buffer'] == True: 
-                    # This call save_checkpoint in checkpointing.py
-                    # get state_dict for init cpu buffer but won't save
-                    # cuz ckpt_args_dict['init_cpu_buffer'] = True
-                    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
-                    ckpt_args_dict['init_cpu_buffer'] = False
+            #     # Build CPU Buffer for async D2H cudaMemcpy
+            #     if ckpt_args_dict['init_cpu_buffer'] == True: 
+            #         # This call save_checkpoint in checkpointing.py
+            #         # get state_dict for init cpu buffer but won't save
+            #         # cuz ckpt_args_dict['init_cpu_buffer'] = True
+            #         save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+            #         ckpt_args_dict['init_cpu_buffer'] = False
             
             # Checkpointing
             saved_checkpoint = False

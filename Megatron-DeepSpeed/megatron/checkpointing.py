@@ -547,11 +547,8 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
                 load_lr_scheduler_states=False, load_module_only=True,
                 tag=args.load_tag)
         else:
-            dp_group_ranks = dist.get_process_group_ranks(mpu.get_data_parallel_group())
-            ckpt_args_dict = {}
-            ckpt_args_dict["dp_group_ranks"] = dp_group_ranks
             loaded_dir, state_dict = model[0].load_checkpoint(load_dir,
-                load_module_strict=strict, tag=args.load_tag, ckpt_args_dict=ckpt_args_dict)
+                load_module_strict=strict, tag=args.load_tag)
         if loaded_dir is None:
             print_rank_0('WARNING: could not find the metadata file {} '.format(
                 load_dir))
