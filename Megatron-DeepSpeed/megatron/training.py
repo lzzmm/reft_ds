@@ -1455,8 +1455,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                     # cuz ckpt_args_dict['init_cpu_buffer'] = True
                     save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
                     ckpt_args_dict['init_cpu_buffer'] = False
-                    if args.get_state_dict_shape:
-                        sys.exit()
             
             # Checkpointing
             saved_checkpoint = False

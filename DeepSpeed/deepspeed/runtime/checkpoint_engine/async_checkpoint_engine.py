@@ -51,7 +51,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         # with open(info_path, "w") as f:
         #     f.write(str(state_dict))
         while stack:
-            current, parent, key, tag = stack.pop()
+            current, parent, key, tag = stack.pop(0)
             if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
                 if ckpt_args_dict['info_zero_stage'] != 0 and tag == "optimizer": 
                     continue
@@ -104,6 +104,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             info_path = os.path.join(info_dir, f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_state_dict_shape.txt")
             with open(info_path, "w") as f:
                 f.write(str(self.state_dict_cpu))
+            sys.exit()
         logger.info(f"[AsyncCkpt] CPU buffer initialized.")
 
     def create(self, tag):
@@ -396,7 +397,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         snapshot_size = 0
         # log_dist(f"data {data} \n cpu_buffers {cpu_buffers}", ranks=[0])
         while stack:
-            current, cpu_buffer, key, tag = stack.pop()
+            current, cpu_buffer, key, tag = stack.pop(0)
             if key is not None:
                 if (isinstance(cpu_buffer, dict) and key not in cpu_buffer) or (isinstance(cpu_buffer, list) and key >= len(cpu_buffer)):
                     if isinstance(current, torch.Tensor):

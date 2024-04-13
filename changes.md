@@ -1,3 +1,6 @@
+# 4.13 stack pop modified
+- Modify `async_checkpoint_engine.py`, the `stack.pop` logic in both prealloc and copy is modified to `stack.pop(0)` to ensure the sequence of elements in the saved state dict is identical to the original state dict.
+
 # 4.13 Shard with padding implemented.
 - The sharding logic in `async_checkpoint_engine.py` has been modified to shard and separate every tensor to each rank, rather than the previous method to separate and designate layers to each rank.
 
