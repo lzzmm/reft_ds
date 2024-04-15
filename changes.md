@@ -1,3 +1,8 @@
+# 4.15 zero_state_dict_buffer added to async_checkpoint_engine
+- When using zero, both `self._save_checkpoint` and `self._save_zero_checkpoint` are both executed in `self.save_checkpoint`. However, only the state_dict generated in `self._save_checkpoint` is provided with a template buffer. 
+- Now the buffer for `self._save_zero_checkpoint` has been added.
+- Added a function for writing any checkpoint into a file with converting tensors to tensor shape to make it easier to read.
+
 # 4.14 Tensor shard load implemented
 - The loading implementation corresponding to tensor shard has completed
 

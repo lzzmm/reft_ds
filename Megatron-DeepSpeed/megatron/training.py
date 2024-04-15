@@ -1440,7 +1440,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             ckpt_args_dict['save_location'] = args.save_location
             ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
             ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
-            ckpt_args_dict['info_zero_stage'] = args.info_zero_stage
+            ckpt_args_dict['zero_stage'] = args.zero_stage
             ckpt_args_dict['pre_alloc'] = args.prealloc
             
             # Temp for test by yuhan 24/03/2024

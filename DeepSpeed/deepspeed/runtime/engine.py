@@ -25,6 +25,9 @@ import deepspeed
 from datetime import datetime
 import sys
 
+sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds/")
+from output import get_state_dict_shape
+
 from deepspeed import comm as dist
 from deepspeed.runtime.utils import see_memory_usage, DummyOptim
 from .zero.offload_config import OffloadDeviceEnum
@@ -3522,7 +3525,8 @@ class DeepSpeedEngine(Module):
     def _save_zero_checkpoint(self, save_path, tag, ckpt_args_dict={}, snapshot_stream=None):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
-        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+        # get_state_dict_shape(zero_sd, "zero_optimizer", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
+        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, is_zero=True)
 
         if self.global_rank == 0:
             self._copy_recovery_script(save_path)
