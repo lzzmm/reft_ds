@@ -916,7 +916,9 @@ class DeepSpeedEngine(Module):
 
     def _configure_checkpointing(self, dist_init_required):
         # self.checkpoint_engine = TorchCheckpointEngine()
-        self.checkpoint_engine = AsyncCheckpointEngine()
+        dp_group = self.mpu.get_data_parallel_group()
+        dp_group_ranks = torch.distributed.get_process_group_ranks(dp_group)
+        self.checkpoint_engine = AsyncCheckpointEngine(dp_group_ranks)
 
         if self._config is not None and self._config.nebula_config.enabled:
             try:
@@ -3525,7 +3527,7 @@ class DeepSpeedEngine(Module):
     def _save_zero_checkpoint(self, save_path, tag, ckpt_args_dict={}, snapshot_stream=None):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
-        # get_state_dict_shape(zero_sd, "zero_optimizer", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
+        get_state_dict_shape(zero_sd, "zero_optimizer", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
         self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, is_zero=True)
 
         if self.global_rank == 0:

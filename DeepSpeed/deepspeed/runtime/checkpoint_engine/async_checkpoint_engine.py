@@ -26,7 +26,7 @@ from output import get_state_dict_shape
    
 class AsyncCheckpointEngine(CheckpointEngine):
     
-    def __init__(self, config_params=None):
+    def __init__(self, config_params=None, dp_group_ranks=None):
         super().__init__(config_params)
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.thread_lock = threading.Lock()
@@ -35,6 +35,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.print_flag = False
         self.init_state_dict_buffer = True
         self.init_zero_state_dict_buffer = True
+        self.dp_group_cpu = dist.new_group(backend="gloo", ranks=dp_group_ranks)
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
         # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
@@ -99,10 +100,16 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 if ckpt_args_dict['zero_stage'] != 0 and tag == "optimizer": 
                     continue
                 chunk_num = ckpt_args_dict["data_parallel_size"]
-                if ckpt_args_dict['enable_pin_memory']:
-                    cpu_buffer = self.get_tensor_shard_cpu_buffer(current, chunk_num).pin_memory()
+                if ckpt_args_dict["enable_sharding"] and ckpt_args_dict["data_parallel_size"] > 1:
+                    if ckpt_args_dict['enable_pin_memory']:
+                        cpu_buffer = self.get_tensor_shard_cpu_buffer(current, chunk_num).pin_memory()
+                    else:
+                        cpu_buffer = self.get_tensor_shard_cpu_buffer(current, chunk_num)
                 else:
-                    cpu_buffer = self.get_tensor_shard_cpu_buffer(current, chunk_num)
+                    if ckpt_args_dict['enable_pin_memory']:
+                        cpu_buffer = torch.empty_like(current, device='cpu').pin_memory()
+                    else:
+                        cpu_buffer = torch.empty_like(current, device='cpu')
                     
                 if parent is not None:
                     parent[key] = (cpu_buffer, current.shape)
@@ -470,23 +477,26 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 if ckpt_args_dict['zero_stage'] != 0 and tag == "optimizer":
                     continue
                 if cpu_buffer[0].device.type == 'cpu':
-                    
-                    # I need to locate the correct position of the shard
-                    # and copy pad it to the correct size
-                    # then copy the shard to the cpu_buffer
-                    shard_dim_0_size = cpu_buffer[0].shape[0]
-                    shard_id = ckpt_args_dict["data_parallel_rank"]
-                    # There are 3 possibilities
-                    if (shard_id + 1) * shard_dim_0_size <= current.shape[0]:
-                        shard = current[shard_id * shard_dim_0_size : (shard_id + 1) * shard_dim_0_size]
-                    else:
-                        if shard_id * shard_dim_0_size < current.shape[0]:
-                            shard = current[shard_id * shard_dim_0_size :]
-                            shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device='cuda')), dim=0)
+                    if ckpt_args_dict["enable_sharding"] and ckpt_args_dict["data_parallel_size"] > 1:
+                        # I need to locate the correct position of the shard
+                        # and copy pad it to the correct size
+                        # then copy the shard to the cpu_buffer
+                        shard_dim_0_size = cpu_buffer[0].shape[0]
+                        shard_id = ckpt_args_dict["data_parallel_rank"]
+                        # There are 3 possibilities
+                        if (shard_id + 1) * shard_dim_0_size <= current.shape[0]:
+                            shard = current[shard_id * shard_dim_0_size : (shard_id + 1) * shard_dim_0_size]
                         else:
-                            shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
-                    snapshot_size += shard.element_size() * shard.numel()
-                    cpu_buffer[0].copy_(shard, non_blocking=True)
+                            if shard_id * shard_dim_0_size < current.shape[0]:
+                                shard = current[shard_id * shard_dim_0_size :]
+                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device='cuda')), dim=0)
+                            else:
+                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
+                        snapshot_size += shard.element_size() * shard.numel()
+                        cpu_buffer[0].copy_(shard, non_blocking=True)
+                    else:
+                        snapshot_size += current.element_size() * current.numel()
+                        cpu_buffer[0].copy_(current, non_blocking=True)
             elif isinstance(current, dict):
                 if type(key) == str:
                     if "embedding" in key:

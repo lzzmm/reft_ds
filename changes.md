@@ -1,3 +1,8 @@
+# 4.16 Create a dp_group_cpu with backend gloo when initializing async ckpt engine 
+
+# 4.15
+- Fixed the bug of enable sharding in `async_checkpoint_engine.py`
+
 # 4.15 zero_state_dict_buffer added to async_checkpoint_engine
 - When using zero, both `self._save_checkpoint` and `self._save_zero_checkpoint` are both executed in `self.save_checkpoint`. However, only the state_dict generated in `self._save_checkpoint` is provided with a template buffer. 
 - Now the buffer for `self._save_zero_checkpoint` has been added.
