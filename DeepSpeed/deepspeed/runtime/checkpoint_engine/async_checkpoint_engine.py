@@ -36,6 +36,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.init_state_dict_buffer = True
         self.init_zero_state_dict_buffer = True
         self.dp_group_cpu = dist.new_group(backend="gloo", ranks=dp_group_ranks)
+        self.save_dir = None
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
         # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
@@ -167,8 +168,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def create(self, tag):
         log_dist(f"[AsyncCkpt] Checkpoint {tag} is about to be saved!", ranks=[0])
 
-    def save(self, state_dict, path: str, device='cuda:0', use_copy_=True, snapshot_stream=torch.cuda.Stream(torch.cuda.current_device()), ckpt_args_dict={}, is_zero=False):
+    def save(self, state_dict, path: str, device='cuda:0', use_copy_=True, snapshot_stream=torch.cuda.Stream(torch.cuda.current_device()), ckpt_args_dict={}, is_zero=False, dp_group_cpu=None, save_dir=None, iteration=None):
         # Prepare cpu buffer if ckpt_args_dict['init_cpu_buffer'] = True
+        self.save_dir = save_dir
         
         if not ckpt_args_dict['enable_snapshot']:
             return
@@ -201,7 +203,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             sys.exit()
         assert ckpt_args_dict != {}
         self.path = path
-        self.make_snapshot(state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero)
+        self.make_snapshot(state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration)
         logger.info(f"[AsyncCkpt] Saved {path}.")
         # self.calculate_parity(state_dict, parity_stream, ckpt_args_dict)
         return None
@@ -278,24 +280,84 @@ class AsyncCheckpointEngine(CheckpointEngine):
         #     parity = compute_xor(*parity_tensors)
         #     return parity
             
+            
+    def construct_scatter_dict(self, ckpt_args_dict):
+        stack = [(self.zero_state_dict_cpu, None, None, None)]
+        split_num = ckpt_args_dict['data_parallel_size'] - 1
+        scatter_dict_list = [None for _ in range(split_num)]
+        while stack:
+            current, parent_list, key, tag = stack.pop(0)
+            if isinstance(current, tuple) and isinstance(current[0], torch.Tensor):
+                # Use torch.tensor_split to split current[0] into ckpt_args_dict['data_parallel_size'] parts
+                # Then parent_list[i][key] = current[0]_split[i]
+                current_tensor = current[0]
+                split_tensors = torch.tensor_split(current_tensor, split_num)                                    
+                # sys.exit()
+                assert(parent_list is not None)
+                for i in range(split_num):
+                    parent_list[i][key] = split_tensors[i]
+            elif isinstance(current, dict):
+                buffer_list = [{} for _ in range(split_num)]
+                if type(key) == str:
+                    if "embedding" in key:
+                        tag = "embedding"
+                    if "optimizer" == key:
+                        tag = "optimizer"
+                for k, v in current.items():
+                    stack.append((v, buffer_list, k, tag))
+                if parent_list is not None:
+                    for i in range(split_num):
+                        parent_list[i][key] = buffer_list[i]
+                else:
+                    for i in range(split_num):
+                        scatter_dict_list[i] = buffer_list[i]
+            elif isinstance(current, list):
+                buffer_list = [[None] * len(current) for _ in range(split_num)]
+                for idx, item in enumerate(current):
+                    stack.append((item, buffer_list, idx, tag))
+                if parent_list is not None:
+                    for i in range(split_num):
+                        parent_list[i][key] = buffer_list[i]
+                else:
+                    for i in range(split_num):
+                        scatter_dict_list[i] = buffer_list[i]
+            else:
+                if parent_list is not None:
+                    for parent in parent_list:
+                        parent[key] = current
+                else:
+                    for i in range(split_num):
+                        scatter_dict_list[i] = current
+                    
+        return scatter_dict_list
     
-    def make_snapshot(self, state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero):
-        logger.info(f"[AsyncCkpt] Snapshoting...")
+    def save_scatter_dict_list(self, scatter_dict_list, ckpt_args_dict):
+        for i in range(ckpt_args_dict['data_parallel_size']):
+            if i != ckpt_args_dict['data_parallel_rank']:
+                scatter_save_path = os.path.join(self.save_dir, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_scatter_dict_{i}.pt")
+                print(f"scatter_save_path: {scatter_save_path}")
+                torch.save(scatter_dict_list[i], scatter_save_path)
+    
+    def make_snapshot(self, state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration):
+        if is_zero:
+            logger.info(f"[AsyncCkpt] Iteration {iteration} Zero checkpointing...")
+        else:
+            logger.info(f"[AsyncCkpt] Iteration {iteration} Snapshoting...")
 
         if ckpt_args_dict['checkpoint_new_thread']:
             logger.info(f"[AsyncCkpt] Using concurrency.")
             snapshot_thread = threading.Thread(
                 target=self._snapshot_thread,
-                args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero)
+                args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration)
             )
             snapshot_thread.start()
         else:
             logger.info(f"[AsyncCkpt] Not using concurrency.")
-            self._snapshot_thread(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero)
+            self._snapshot_thread(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration)
         # self.make_snapshot_sync(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict)
         # return snapshot_thread
         
-    def _snapshot_thread(self, state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict, is_zero):
+    def _snapshot_thread(self, state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict, is_zero, dp_group_cpu, iteration):
         # if use_timer and step_cnt > 10:
         torch.cuda.set_device(device)
         # time.sleep(0.8)
@@ -305,9 +367,35 @@ class AsyncCheckpointEngine(CheckpointEngine):
             snapshot_size = os.path.getsize(self.path)
         else:
             snapshot_size = self._make_snapshot(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict, is_zero)
+            # if is_zero:
+            #     print(f"Iteration {iteration} Into zero scatter logic")
+            #     optimizer_state_dict_scatter_list = self.construct_scatter_dict(ckpt_args_dict)
+            #     # optimizer_state_dict_scatter_list = [torch.randn(375422976) for _ in range(ckpt_args_dict['data_parallel_size'])]
+            #     # print(f"Iteration {iteration} After construct scatter dict")
+            #     optimizer_state_dict_scatter_list.insert(ckpt_args_dict['data_parallel_rank'], None)
+            #     scatter_dict_list = []
+            #     for i in range(ckpt_args_dict['data_parallel_size']):
+            #         if i == ckpt_args_dict['data_parallel_rank']:
+            #             scatter_input_list = optimizer_state_dict_scatter_list
+            #         else:
+            #             scatter_input_list = [None for _ in range(ckpt_args_dict['data_parallel_size'])]
+            #             # scatter_input_list = None
+            #         scatter_output_list = [None]
+            #         dist.scatter_object_list(scatter_output_list, scatter_input_list, group=dp_group_cpu, src=i)
+            #         scatter_dict_list.append(scatter_output_list[0])
+            #         # scatter_dict_list.append(scatter_output_list)
+                    
+            #     print(f"Iteration {iteration} After scatter object list")
+                
+            #     self.save_scatter_dict_list(scatter_dict_list, ckpt_args_dict)
+            #     print(f"Iteration {iteration} After save scatter dict list")
         end_time = time.perf_counter()
         snapshot_size = snapshot_size / 1024 / 1024
-        print(f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size} MB, snapshot_speed: {snapshot_size / (end_time - start_time)} MB/s")
+        print(f"Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size} MB, snapshot_speed: {snapshot_size / (end_time - start_time)} MB/s")
+        if is_zero:
+            logger.info(f"[AsyncCkpt] Iteration {iteration} Zero checkpoint done.")
+        else:
+            print(f"[AsyncCkpt] Iteration {iteration} Snapshot done.")
 
  
     def get_shard_layers(self, ckpt_args_dict):

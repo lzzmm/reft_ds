@@ -1236,13 +1236,13 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
     return report_memory_flag
 
 
-def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict={}, snapshot_stream=None):
+def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None):
     assert ckpt_args_dict != {}
     timers = get_timers()
     # Extra barrier is added to make sure
     # all ranks report the max time.
     timers('save-checkpoint', log_level=0).start(barrier=True)
-    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+    save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
     timers('save-checkpoint').stop(barrier=True)
     checkpoint_throughput_calculator(model, timers('save-checkpoint').elapsed(reset=False))
     timers.log(['save-checkpoint'])
@@ -1257,6 +1257,10 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     if args.data_parallel_size > 1 and args.enable_sharding and args.enable_parity:
         assert args.num_layers % (args.data_parallel_size * (args.data_parallel_size - 1)) == 0
     args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
+    
+    dp_group_ranks = dist.get_process_group_ranks(mpu.get_data_parallel_group())
+    dp_group_cpu = dist.new_group(ranks=dp_group_ranks, backend="gloo")
+    # dp_group_cpu = mpu.get_data_parallel_group()
     
     def trace_handler(p):
         trace_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/trace"
@@ -1462,7 +1466,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                 signal_handler = get_signal_handler()
                 if any(signal_handler.signals_received()):
                     save_checkpoint_and_time(iteration, model, optimizer,
-                                            opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                                            opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
                     print_datetime('exiting program after receiving SIGTERM.')
                     sys.exit()
 
@@ -1470,7 +1474,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             iteration % args.save_interval == 0:
                 # with record_function("save_checkpoint"):
                 save_checkpoint_and_time(iteration, model, optimizer,
-                                        opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                                        opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
                 saved_checkpoint = True
                 
 
@@ -1485,7 +1489,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                 if done:
                     if not saved_checkpoint:
                         save_checkpoint_and_time(iteration, model, optimizer,
-                                                opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                                                opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
                     print_datetime('exiting program after {} minutes'.format(train_time))
                     sys.exit()
 
@@ -1494,7 +1498,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             if args.exit_interval and iteration % args.exit_interval == 0:
                 if args.save and not saved_checkpoint:
                     save_checkpoint_and_time(iteration, model, optimizer,
-                                            opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+                                            opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
                 torch.distributed.barrier()
                 print_datetime('exiting program at iteration {}'.format(iteration))
                 sys.exit()

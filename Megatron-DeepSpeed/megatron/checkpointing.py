@@ -223,7 +223,7 @@ def get_rng_state():
     return rng_state_list
 
 
-def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict={}, snapshot_stream=None):
+def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None):
     """Save a model checkpoint."""
     assert ckpt_args_dict != {}
     args = get_args()
@@ -302,7 +302,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_
         for _ in range(3):
             checkpoint_name = os.path.dirname(checkpoint_name)    
         
-        model[0].save_checkpoint(checkpoint_name, client_state=state_dict, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
+        model[0].save_checkpoint(checkpoint_name, client_state=state_dict, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration)
 
         if args.no_pipeline_parallel:
             model[0].module.state_dict = original_state_dict
