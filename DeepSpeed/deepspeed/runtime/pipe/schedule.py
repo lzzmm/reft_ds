@@ -485,7 +485,6 @@ class RecvGrad(BufferOpInstruction):
     """
     pass
 
-
 def _is_even(x):
     return x % 2 == 0
 

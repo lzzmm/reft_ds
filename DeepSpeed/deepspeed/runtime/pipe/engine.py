@@ -27,6 +27,13 @@ from ..activation_checkpointing import checkpointing as ds_checkpointing
 from .module import PipelineModule, PipelineError
 from . import p2p
 from . import schedule
+import sys
+sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds")
+import config as global_config
+import output as global_output
+from datetime import datetime
+import os
+import time
 
 TARGET_ID = -2
 LOG_STAGE = -2
@@ -655,6 +662,8 @@ class PipelineEngine(DeepSpeedEngine):
 
         # inputs has no gradient because it is from a cloned tensor
         outputs = super().forward(inputs)
+        
+        # global_output.get_state_dict_shape(self.optimizer.state_dict(), "DeepspeedPipeEngine optimizer", global_config.data_parallel_rank, global_config.pipeline_parallel_rank, global_config.tensor_parallel_rank, global_config.zero_stage)
 
         # Reset activation checkpointing buffers.
         # Need to call this between evaluation iterations
@@ -1334,12 +1343,26 @@ class PipelineEngine(DeepSpeedEngine):
         self.fwd_outputs = []
 
         # For each step in the schedule
-        for step_cmds in pipe_schedule:
-            # For each instruction in the step
-            for cmd in step_cmds:
-                if type(cmd) not in self._INSTRUCTION_MAP:
-                    raise RuntimeError(f'{self.__class__.__name__} does not understand instruction {repr(cmd)}')
+        info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+        time_stamp = datetime.now().strftime('%m%d-%H%M%S')
+        # if os.path.join(info_dir, "stage_time") does not exist, create it
+        if not os.path.exists(os.path.join(info_dir, "stage_time")):
+            os.makedirs(os.path.join(info_dir, "stage_time"))
+        info_path = os.path.join(info_dir, "stage_time", f"{time_stamp}_stage_{self.stage_id}.txt")
+        with open(info_path, "w") as f:
+            for i, step_cmds in enumerate(pipe_schedule):
+                # Get the time stamp of month day hour minute
+                start_timestamp = datetime.now().strftime('%m%d-%H%M%S.%f')
+                start_time = time.perf_counter()
+                f.write(f"[{start_timestamp}] stage id {self.stage_id} step {i} start\n")
+                # For each instruction in the step
+                for cmd in step_cmds:
+                    if type(cmd) not in self._INSTRUCTION_MAP:
+                        raise RuntimeError(f'{self.__class__.__name__} does not understand instruction {repr(cmd)}')
 
-                # Equivalent to: self._exec_forward_pass(buffer_id=0)
-                self._exec_instr = MethodType(self._INSTRUCTION_MAP[type(cmd)], self)
-                self._exec_instr(**cmd.kwargs)
+                    # Equivalent to: self._exec_forward_pass(buffer_id=0)
+                    self._exec_instr = MethodType(self._INSTRUCTION_MAP[type(cmd)], self)
+                    self._exec_instr(**cmd.kwargs)
+                end_timestamp = datetime.now().strftime('%m%d-%H%M%S.%f')
+                end_time = time.perf_counter()
+                f.write(f"[{end_timestamp}] stage id {self.stage_id} step {i} end, step time cost: {end_time - start_time} seconds\n")

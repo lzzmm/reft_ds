@@ -1,3 +1,10 @@
+# 4.29
+- Write the start and end time of each stage into files for validating.
+
+
+# 4.27 global config and output
+- Global config is added for recording basic args like parallel size and rank to help print debug information throughout the project.
+
 # 4.16 Create a dp_group_cpu with backend gloo when initializing async ckpt engine 
 
 # 4.15

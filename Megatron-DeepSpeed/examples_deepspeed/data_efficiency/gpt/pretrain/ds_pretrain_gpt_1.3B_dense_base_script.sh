@@ -31,7 +31,7 @@ model_size=0.125
 num_layers=12
 hidden_size=768
 num_attn_heads=12
-global_batch_size=4
+global_batch_size=128
 lr=6.0e-4
 min_lr=1.0e-6
 init_std=0.02
@@ -149,12 +149,12 @@ mp_size=1
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=1
-no_pp="true"
-# no_pp="false"
+pp_size=4
+# no_pp="true"
+no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
-zero_stage=1
+zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
 # num_gpus=$(($(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)-2))
@@ -162,16 +162,16 @@ zero_stage=1
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
 num_node=1
-num_gpus=2
+num_gpus=4
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=2
-
+dp_size=1
+gradient_accumulation_steps=8
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 ## Reduce it manually if GPU OOM
-batch_size=$(( ${global_batch_size} / ${dp_size} ))
+batch_size=$(( ${global_batch_size} / ${dp_size} / ${gradient_accumulation_steps} ))
 echo "batch_size: $batch_size"
 ###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
@@ -674,6 +674,6 @@ fi
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --include="localhost:1,2" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --include="localhost:4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --hostfile=hostfile --include="gpu1-19:0@gpu1-23:1" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
