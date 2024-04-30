@@ -62,6 +62,7 @@ except (ImportError, ModuleNotFoundError):
     
 sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds")
 import config as global_config
+import output as global_output
 
 
 def print_datetime(string):
@@ -1261,9 +1262,12 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         assert args.num_layers % (args.data_parallel_size * (args.data_parallel_size - 1)) == 0
     args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
     
-    dp_group_ranks = dist.get_process_group_ranks(mpu.get_data_parallel_group())
-    dp_group_cpu = dist.new_group(ranks=dp_group_ranks, backend="gloo")
+    # dp_group_ranks = dist.get_process_group_ranks(mpu.get_data_parallel_group())
+    # dp_group_cpu = dist.new_group(ranks=dp_group_ranks, backend="gloo")
     # dp_group_cpu = mpu.get_data_parallel_group()
+    dp_group_cpu = None
+    
+    
     global_config.data_parallel_rank = mpu.get_data_parallel_rank() 
     global_config.data_parallel_size = mpu.get_data_parallel_world_size()
     global_config.pipeline_parallel_rank = mpu.get_pipeline_model_parallel_rank()
@@ -1272,6 +1276,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     global_config.tensor_parallel_size = mpu.get_tensor_model_parallel_world_size()
     global_config.zero_stage = args.zero_stage
     global_config.save_dir = args.save
+    
+    global_output.init_logger("Use parity")
     
     def trace_handler(p):
         trace_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/trace"

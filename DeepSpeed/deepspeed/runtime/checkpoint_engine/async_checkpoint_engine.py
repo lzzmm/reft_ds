@@ -35,7 +35,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.print_flag = False
         self.init_state_dict_buffer = True
         self.init_zero_state_dict_buffer = True
-        self.dp_group_cpu = dist.new_group(backend="gloo", ranks=dp_group_ranks)
+        self.dp_group_cpu = None
         self.save_dir = None
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):

@@ -243,6 +243,9 @@ class DeepSpeedEngine(Module):
 
         # needed for zero_to_fp32 weights reconstruction to remap nameless data to state_dict
         self.param_names = {param: name for name, param in model.named_parameters()}
+        self.save_dir = None
+        if hasattr(args, "save") and args.save is not None:
+            self.save_dir = args.save
 
         self._do_args_sanity_check(args)
         self._configure_with_arguments(args, mpu)

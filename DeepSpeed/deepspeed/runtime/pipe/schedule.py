@@ -213,6 +213,8 @@ class TrainSchedule(PipeSchedule):
             # Exchange activations
             if is_forward:
                 if self._valid_micro_batch(prev_micro_batch_id) and self._valid_stage(self.prev_stage):
+                    # Current step is fwd, it needs activation from prev stage
+                    # The prev stage is bwd, it needs grad from current stage.
                     cmds.append(SendGrad(prev_buffer))
                 if self._valid_micro_batch(micro_batch_id) and self._valid_stage(self.prev_stage):
                     cmds.append(RecvActivation(curr_buffer))
@@ -239,6 +241,12 @@ class TrainSchedule(PipeSchedule):
                 cmds.append(ReduceTiedGrads())
                 cmds.append(ReduceGrads())
                 cmds.append(OptimizerStep())
+                
+            if self.stage_id != 0 and step_id == (self.stage_id - 1):
+                cmds.append(ComputeParity(is_pre_bubble=True))
+                
+            if self.stage_id != (self.stages - 1) and step_id == (2 * self.stages - self.stage_id -2):
+                cmds.append(ComputeParity(is_pre_bubble=False))
 
             # Prepare state for next time
             prev_micro_batch_id = micro_batch_id
@@ -343,6 +351,8 @@ class PipeInstruction:
     def __repr__(self):
         return call_to_str(self.name, **self.kwargs)
 
+class ComputeParity(PipeInstruction):
+    pass
 
 class OptimizerStep(PipeInstruction):
     """Performs one step with the optimizer and zeros gradients.

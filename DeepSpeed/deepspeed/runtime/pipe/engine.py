@@ -7,6 +7,8 @@ from types import MethodType
 
 import torch
 from deepspeed import comm as dist
+import copy
+import math
 
 from deepspeed.utils import logger
 from deepspeed.utils.timer import ThroughputTimer
@@ -182,6 +184,12 @@ class PipelineEngine(DeepSpeedEngine):
             'outputs': [],  # activations
             'output_tensors': [],  # tensor object to preserve backward graph
         }
+        self.param_parity_dict = {}
+        self.optimizer_parity_dict = {}
+        self.param_tensors_total_size = self.get_dict_tensors_total_size(self.module.state_dict())
+        self.optimizer_tensors_total_size = self.get_dict_tensors_total_size(self.optimizer.state_dict())
+        self.parity_pre_bubble_processed_size = 0
+        
         self.pipe_recv_buf = None
         self.grad_layer = None
 
@@ -242,6 +250,25 @@ class PipelineEngine(DeepSpeedEngine):
             self.timers(BACKWARD_REDUCE_GLOBAL_TIMER).stop()
             self.timers(STEP_MICRO_TIMER).start()
             self.timers(STEP_MICRO_TIMER).stop()
+            
+    def get_dict_tensors_total_size(self, state_dict):
+        total_size = 0
+        stack = [(state_dict)]
+        while stack:
+            current = stack.pop(0)
+            if isinstance(current, torch.Tensor):
+                total_size += current.numel()
+            elif isinstance(current, dict):
+                for k, v in current.items():
+                    stack.append(v)
+            elif isinstance(current, list):
+                for idx, item in enumerate(current):
+                    stack.append(item)
+            else:
+                pass
+            
+        return total_size
+    
 
     def set_has_attention_mask(self, value):
         assert isinstance(value, bool)
@@ -663,7 +690,7 @@ class PipelineEngine(DeepSpeedEngine):
         # inputs has no gradient because it is from a cloned tensor
         outputs = super().forward(inputs)
         
-        # global_output.get_state_dict_shape(self.optimizer.state_dict(), "DeepspeedPipeEngine optimizer", global_config.data_parallel_rank, global_config.pipeline_parallel_rank, global_config.tensor_parallel_rank, global_config.zero_stage)
+        global_output.get_state_dict_shape(self.optimizer.state_dict(), "DeepspeedPipeEngine optimizer", global_config.data_parallel_rank, global_config.pipeline_parallel_rank, global_config.tensor_parallel_rank, global_config.zero_stage)
 
         # Reset activation checkpointing buffers.
         # Need to call this between evaluation iterations
@@ -953,6 +980,154 @@ class PipelineEngine(DeepSpeedEngine):
 
         else:
             raise NotImplementedError(f'Could not receive type {type(recv_type)}')
+        
+    def _exec_compute_parity(self, is_pre_bubble):
+        def compute_xor(*gpu_tensors):
+            assert torch.cuda.is_available(), "CUDA is not available. This function requires a GPU."  
+            int_tensors = [tensor.view(torch.int32) for tensor in gpu_tensors]   
+            parity = torch.zeros_like(int_tensors[0])
+            for tensor in int_tensors:
+                parity ^= tensor
+                
+            return parity
+        if is_pre_bubble:
+            self.param_parity_dict = self.module.state_dict()
+            self.optimizer_parity_dict = self.optimizer.state_dict()
+            pre_bubble_alloc_size = round((self.stage_id / (2 * self.num_stages - self.stage_id - 2)) * (self.param_tensors_total_size + self.optimizer_tensors_total_size))
+            
+        pre_bubble_current_processed_size = 0
+        post_bubble_jumped_size = 0
+        dp_rank = self.mpu.get_data_parallel_rank()
+        dp_size = self.mpu.get_data_parallel_world_size()
+        # In pre bubble time, param dict must be processed. And if it is not finished in pre bubble, it should also be processed in post bubble time
+        if is_pre_bubble or (not is_pre_bubble and self.parity_pre_bubble_processed_size < self.param_tensors_total_size):
+            param_root = None
+            stack = [(self.param_parity_dict, None, None)]
+            while stack:
+                current, parent, key = stack.pop(0)
+                if isinstance(current, torch.Tensor):
+                    if is_pre_bubble and pre_bubble_current_processed_size > pre_bubble_alloc_size:
+                        parity_buffer = current
+                    elif not is_pre_bubble and post_bubble_jumped_size < self.parity_pre_bubble_processed_size:
+                        parity_buffer = current
+                        post_bubble_jumped_size += current.numel()
+                    else:
+                        # calculate the parity of this tensor for the current dp rank
+                        shape = current.shape
+                        padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1)))
+                        padding = [0] * (2 * (current.dim() - 1))
+                        padding = padding + [0, padded_shape_dim_0 - shape[0]]
+                        padded_current_tensor = torch.nn.functional.pad(current, padding)
+                        tensor_shards = padded_current_tensor.chunk(dp_size * (dp_size - 1), dim=0)
+                        # Figure out the shards participating the parity computation based on dp rank
+                        current_parity_shards = []
+                        # i is the dp rank to be taken shards
+                        for i in range(dp_size):
+                            if i != dp_rank:
+                                current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
+                        parity_buffer = compute_xor(*current_parity_shards)
+                        if is_pre_bubble:
+                            pre_bubble_current_processed_size += current.numel()
+                        
+                    if parent is not None:
+                        parent[key] = parity_buffer
+                    else:
+                        param_root = parity_buffer
+                elif isinstance(current, dict):
+                    parity_buffer = {}
+                    for k, v in current.items():
+                        stack.append((v, parity_buffer, k))
+                    if parent is not None:
+                        parent[key] = parity_buffer
+                    else:
+                        param_root = parity_buffer
+                elif isinstance(current, list):
+                    parity_buffer = [None] * len(current)
+                    for idx, item in enumerate(current):
+                        stack.append((item, parity_buffer, idx))
+                    if parent is not None:
+                        parent[key] = parity_buffer
+                    else:
+                        param_root = parity_buffer
+                else:
+                    if parent is not None:
+                        parent[key] = None # wait for copy
+                        # parent[key] = current
+                    else:
+                        param_root = current
+                        
+            self.param_parity_dict = param_root
+        
+        if (self.zero_optimization_stage() == 0 and is_pre_bubble and pre_bubble_current_processed_size < pre_bubble_alloc_size) or not is_pre_bubble:
+            if not is_pre_bubble and self.parity_pre_bubble_processed_size > self.param_tensors_total_size:
+                post_bubble_jumped_size += self.param_tensors_total_size
+                
+            optimizer_root = None
+            stack = [(self.optimizer_parity_dict, None, None)]
+            while stack:
+                current, parent, key = stack.pop(0)
+                if isinstance(current, torch.Tensor):
+                    if is_pre_bubble and pre_bubble_current_processed_size > pre_bubble_alloc_size:
+                        parity_buffer = current
+                    elif not is_pre_bubble and post_bubble_jumped_size < self.parity_pre_bubble_processed_size:
+                        parity_buffer = current
+                        post_bubble_jumped_size += current.numel()
+                    else:
+                        # calculate the parity of this tensor for the current dp rank
+                        shape = current.shape
+                        padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1)))
+                        padding = [0] * (2 * (current.dim() - 1))
+                        padding = padding + [0, padded_shape_dim_0 - shape[0]]
+                        padded_current_tensor = torch.nn.functional.pad(current, padding)
+                        tensor_shards = padded_current_tensor.chunk(dp_size * (dp_size - 1), dim=0)
+                        # Figure out the shards participating the parity computation based on dp rank
+                        current_parity_shards = []
+                        # i is the dp rank to be taken shards
+                        for i in range(dp_size):
+                            if i != dp_rank:
+                                current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
+                        parity_buffer = compute_xor(*current_parity_shards)
+                        if is_pre_bubble:
+                            pre_bubble_current_processed_size += current.numel()
+                        
+                    if parent is not None:
+                        parent[key] = parity_buffer
+                    else:
+                        optimizer_root = parity_buffer
+                elif isinstance(current, dict):
+                    parity_buffer = {}
+                    for k, v in current.items():
+                        stack.append((v, parity_buffer, k))
+                    if parent is not None:
+                        parent[key] = parity_buffer
+                    else:
+                        optimizer_root = parity_buffer
+                elif isinstance(current, list):
+                    parity_buffer = [None] * len(current)
+                    for idx, item in enumerate(current):
+                        stack.append((item, parity_buffer, idx))
+                    if parent is not None:
+                        parent[key] = parity_buffer
+                    else:
+                        optimizer_root = parity_buffer
+                else:
+                    if parent is not None:
+                        parent[key] = None # wait for copy
+                        # parent[key] = current
+                    else:
+                        optimizer_root = current
+                        
+            self.optimizer_parity_dict = optimizer_root
+            
+        if is_pre_bubble:
+            self.parity_pre_bubble_processed_size = pre_bubble_current_processed_size
+        # else:
+        #     tag = f"global_step{self.global_steps}"
+        #     time_stamp = datetime.now().strftime("%m%d-%H%M%S")
+        #     param_save_path = os.path.join(self.save_dir, tag, f"{time_stamp}_dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_param_parity.pt")
+        #     optimizer_save_path = os.path.join(self.save_dir, tag, f"{time_stamp}_dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_optimizer_parity.pt")
+        #     torch.save(self.param_parity_dict, param_save_path)
+        #     torch.save(self.optimizer_parity_dict, optimizer_save_path)
 
     def _exec_send_activations(self, buffer_id):
         if self.wall_clock_breakdown():
@@ -1335,6 +1510,7 @@ class PipelineEngine(DeepSpeedEngine):
         schedule.RecvActivation: _exec_recv_activations,
         schedule.SendGrad: _exec_send_grads,
         schedule.RecvGrad: _exec_recv_grads,
+        schedule.ComputeParity: _exec_compute_parity,
     }
 
     def _exec_schedule(self, pipe_schedule):
@@ -1343,26 +1519,19 @@ class PipelineEngine(DeepSpeedEngine):
         self.fwd_outputs = []
 
         # For each step in the schedule
-        info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
-        time_stamp = datetime.now().strftime('%m%d-%H%M%S')
-        # if os.path.join(info_dir, "stage_time") does not exist, create it
-        if not os.path.exists(os.path.join(info_dir, "stage_time")):
-            os.makedirs(os.path.join(info_dir, "stage_time"))
-        info_path = os.path.join(info_dir, "stage_time", f"{time_stamp}_stage_{self.stage_id}.txt")
-        with open(info_path, "w") as f:
-            for i, step_cmds in enumerate(pipe_schedule):
-                # Get the time stamp of month day hour minute
-                start_timestamp = datetime.now().strftime('%m%d-%H%M%S.%f')
-                start_time = time.perf_counter()
-                f.write(f"[{start_timestamp}] stage id {self.stage_id} step {i} start\n")
-                # For each instruction in the step
-                for cmd in step_cmds:
-                    if type(cmd) not in self._INSTRUCTION_MAP:
-                        raise RuntimeError(f'{self.__class__.__name__} does not understand instruction {repr(cmd)}')
+        for i, step_cmds in enumerate(pipe_schedule):
+            # Get the time stamp of month day hour minute
+            # For each instruction in the step
+            for cmd in step_cmds:
+                if type(cmd) not in self._INSTRUCTION_MAP:
+                    raise RuntimeError(f'{self.__class__.__name__} does not understand instruction {repr(cmd)}')
 
-                    # Equivalent to: self._exec_forward_pass(buffer_id=0)
-                    self._exec_instr = MethodType(self._INSTRUCTION_MAP[type(cmd)], self)
-                    self._exec_instr(**cmd.kwargs)
-                end_timestamp = datetime.now().strftime('%m%d-%H%M%S.%f')
+                # Equivalent to: self._exec_forward_pass(buffer_id=0)
+                start_time = time.perf_counter()
+                # global_output.log_info(f"stage id {self.stage_id} step {i}, instruction {type(cmd).__name__} start")
+                self._exec_instr = MethodType(self._INSTRUCTION_MAP[type(cmd)], self)
+                self._exec_instr(**cmd.kwargs)
                 end_time = time.perf_counter()
-                f.write(f"[{end_timestamp}] stage id {self.stage_id} step {i} end, step time cost: {end_time - start_time} seconds\n")
+                # global_output.log_info(f"stage id {self.stage_id} step {i}, instruction {type(cmd).__name__} end, step time cost: {end_time - start_time} seconds")
+                
+            # global_output.log_info("")
