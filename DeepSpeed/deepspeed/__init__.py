@@ -71,7 +71,9 @@ def initialize(args=None,
                dist_init_required: Optional[bool] = None,
                collate_fn=None,
                config=None,
-               config_params=None):
+               config_params=None,
+               ckpt_args_dict=None,
+               snapshot_stream=None):
     """Initialize the DeepSpeed Engine.
 
     Arguments:
@@ -193,7 +195,9 @@ def initialize(args=None,
                                 dist_init_required=dist_init_required,
                                 collate_fn=collate_fn,
                                 config=config,
-                                config_class=config_class)
+                                config_class=config_class,
+                                ckpt_args_dict=ckpt_args_dict,
+                                snapshot_stream=snapshot_stream)
 
     # Restore zero.Init context if necessary
     zero.partition_parameters.restore_init_context()

@@ -244,10 +244,16 @@ class TrainSchedule(PipeSchedule):
                 
             if self.stage_id != 0 and step_id == (self.stage_id - 1):
                 cmds.append(ComputeParity(is_pre_bubble=True))
+                # if self.stage_id >= (2 * self.num_stages - 2 * self.stage_id - 2):
+                #     cmds.append(SaveCheckpoint())
                 
             if self.stage_id != (self.stages - 1) and step_id == (2 * self.stages - self.stage_id -2):
                 cmds.append(ComputeParity(is_pre_bubble=False))
-
+                # if self.stage_id < (2 * self.num_stages - 2 * self.stage_id - 2):
+                #     cmds.append(SaveCheckpoint())
+            # checkpoint after warmup
+            if step_id == (2 * self.num_stages - self.stage_id):
+                cmds.append(SaveCheckpoint())
             # Prepare state for next time
             prev_micro_batch_id = micro_batch_id
             yield cmds
@@ -352,6 +358,9 @@ class PipeInstruction:
         return call_to_str(self.name, **self.kwargs)
 
 class ComputeParity(PipeInstruction):
+    pass
+
+class SaveCheckpoint(PipeInstruction):
     pass
 
 class OptimizerStep(PipeInstruction):

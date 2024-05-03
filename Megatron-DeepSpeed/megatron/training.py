@@ -152,6 +152,35 @@ def pretrain(train_valid_test_dataset_provider,
     args = get_args()
     timers = get_timers()
     snapshot_stream = torch.cuda.Stream(torch.cuda.current_device())
+    ckpt_args_dict = {}
+    ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
+    ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
+    ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
+    ckpt_args_dict['world_size'] = args.world_size
+    ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
+    ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
+    ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
+    ckpt_args_dict['num_layers'] = args.num_layers
+    ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
+    ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
+    ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
+    ckpt_args_dict['enable_parity'] = args.enable_parity
+    ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
+    ckpt_args_dict['enable_sharding'] = args.enable_sharding
+    ckpt_args_dict['save_embeddings'] = args.save_embeddings
+    ckpt_args_dict['enable_save'] = args.enable_save
+    ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
+    ckpt_args_dict['save_location'] = args.save_location
+    ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
+    ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
+    ckpt_args_dict['zero_stage'] = args.zero_stage
+    ckpt_args_dict['pre_alloc'] = args.prealloc
+    ckpt_args_dict['save_checkpoint_in_bubble'] = args.save_checkpoint_in_bubble
+    ckpt_args_dict['save_dir'] = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
+    if args.save_checkpoint_in_bubble:
+        if dist.get_rank() == 0:
+            os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
+        dist.barrier()
     if args.deepspeed:
         args.deepspeed_config_dict = _create_ds_config_dict()
         if "curriculum_learning" in args.deepspeed_config_dict and \
@@ -170,7 +199,8 @@ def pretrain(train_valid_test_dataset_provider,
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
         model_provider, model_type, teacher=False, data_post_process=data_post_process,
-        build_train_valid_test_datasets_provider=train_valid_test_dataset_provider)
+        build_train_valid_test_datasets_provider=train_valid_test_dataset_provider, ckpt_args_dict=ckpt_args_dict,
+        snapshot_stream=snapshot_stream)
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
@@ -234,7 +264,7 @@ def pretrain(train_valid_test_dataset_provider,
             iteration = train(forward_step_func,
                             model, optimizer, opt_param_scheduler,
                             train_data_iterator, valid_data_iterator,
-                            process_non_loss_data_func, snapshot_stream)
+                            process_non_loss_data_func, snapshot_stream, ckpt_args_dict)
 
         print_datetime('after training is done')
         # Clean the model
@@ -570,7 +600,9 @@ def setup_model_and_optimizer(model_provider_func,
                               lr_mult=1.0,
                               teacher=False,
                               data_post_process=None,
-                              build_train_valid_test_datasets_provider=None):
+                              build_train_valid_test_datasets_provider=None,
+                              ckpt_args_dict=None,
+                              snapshot_stream=None):
     """Setup model and optimizer."""
     args = get_args()
 
@@ -664,6 +696,8 @@ def setup_model_and_optimizer(model_provider_func,
                 lr_scheduler=opt_param_scheduler,
                 mpu=mpu if args.no_pipeline_parallel else None,
                 config=args.deepspeed_config_dict,
+                ckpt_args_dict=ckpt_args_dict,
+                snapshot_stream=snapshot_stream,
             )
         if isinstance(model, deepspeed.PipelineEngine):
             # hack to get batch_fn from pretrain_gpt.py
@@ -1254,7 +1288,7 @@ def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, c
 
 def train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator, valid_data_iterator,
-          process_non_loss_data_func, snapshot_stream):
+          process_non_loss_data_func, snapshot_stream, ckpt_args_dict):
     """Train the model function."""
     args = get_args()
     timers = get_timers()
@@ -1277,15 +1311,14 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     global_config.zero_stage = args.zero_stage
     global_config.save_dir = args.save
     
-    global_output.init_logger("Use parity")
+    global_output.init_logger()
     
     def trace_handler(p):
         trace_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/trace"
-        time_stamp = datetime.now().strftime("%m%d-%H%M")
-        trace_dir = os.path.join(trace_dir, time_stamp)
+        trace_dir = os.path.join(trace_dir, global_output.init_time_stamp)
         # trace_dir = os.path.join(args.save, "trace_training")
         os.makedirs(trace_dir, exist_ok=True)
-        trace_file = os.path.join(trace_dir, f"{dist.get_rank()}_{time_stamp}_trace.json")
+        trace_file = os.path.join(trace_dir, f"{global_output.init_time_stamp}_dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()}_trace.json")
         print("trace_file", trace_file)
         p.export_chrome_trace(trace_file)
     
@@ -1300,9 +1333,9 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         profiler_context = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
             schedule=torch.profiler.schedule(
-                skip_first=10,
+                skip_first=5,
                 wait=0,
-                warmup=5,
+                warmup=2,
                 active=10,
                 repeat=1),
             profile_memory=True,
@@ -1440,29 +1473,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         
             # print data_parallel_rank, pipeline_model_parallel_rank, tensor_model_parallel_rank, data_parallel_size, pipeline_model_parallel_size, tensor_model_parallel_size, world_size
             # torch.cuda.synchronize()
-            ckpt_args_dict = {}
-            ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
-            ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
-            ckpt_args_dict['data_parallel_size'] = args.data_parallel_size
-            ckpt_args_dict['world_size'] = args.world_size
-            ckpt_args_dict['pipeline_model_parallel_rank'] = mpu.get_pipeline_model_parallel_rank()
-            ckpt_args_dict['tensor_model_parallel_rank'] = mpu.get_tensor_model_parallel_rank()
-            ckpt_args_dict['data_parallel_rank'] = mpu.get_data_parallel_rank() 
-            ckpt_args_dict['num_layers'] = args.num_layers
-            ckpt_args_dict['checkpoint_new_thread'] = args.checkpoint_new_thread
-            ckpt_args_dict['checkpoint_new_stream'] = args.checkpoint_new_stream
-            ckpt_args_dict['double_checkpoint'] = args.double_checkpoint
-            ckpt_args_dict['enable_parity'] = args.enable_parity
-            ckpt_args_dict['enable_pin_memory'] = args.enable_pin_memory
-            ckpt_args_dict['enable_sharding'] = args.enable_sharding
-            ckpt_args_dict['save_embeddings'] = args.save_embeddings
-            ckpt_args_dict['enable_save'] = args.enable_save
-            ckpt_args_dict['enable_snapshot'] = args.enable_snapshot
-            ckpt_args_dict['save_location'] = args.save_location
-            ckpt_args_dict['pure_torch_save'] = args.pure_torch_save
-            ckpt_args_dict['get_state_dict_shape'] = args.get_state_dict_shape
-            ckpt_args_dict['zero_stage'] = args.zero_stage
-            ckpt_args_dict['pre_alloc'] = args.prealloc
+            
             
             # Temp for test by yuhan 24/03/2024
             # if enable_prealloc:
@@ -1478,47 +1489,48 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             #         ckpt_args_dict['init_cpu_buffer'] = False
             
             # Checkpointing
-            saved_checkpoint = False
-            if args.exit_signal_handler:
-                signal_handler = get_signal_handler()
-                if any(signal_handler.signals_received()):
-                    save_checkpoint_and_time(iteration, model, optimizer,
-                                            opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
-                    print_datetime('exiting program after receiving SIGTERM.')
-                    sys.exit()
-
-            if args.save and args.save_interval and \
-            iteration % args.save_interval == 0:
-                # with record_function("save_checkpoint"):
-                save_checkpoint_and_time(iteration, model, optimizer,
-                                        opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
-                saved_checkpoint = True
-                
-
-            # Exiting based on duration
-            if args.exit_duration_in_mins:
-                train_time = (time.time() - _TRAIN_START_TIME) / 60.0
-                done_cuda = get_accelerator().IntTensor(
-                    [train_time > args.exit_duration_in_mins])
-                torch.distributed.all_reduce(
-                    done_cuda, op=torch.distributed.ReduceOp.MAX)
-                done = done_cuda.item()
-                if done:
-                    if not saved_checkpoint:
+            if not ckpt_args_dict['save_checkpoint_in_bubble']:
+                saved_checkpoint = False
+                if args.exit_signal_handler:
+                    signal_handler = get_signal_handler()
+                    if any(signal_handler.signals_received()):
                         save_checkpoint_and_time(iteration, model, optimizer,
                                                 opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
-                    print_datetime('exiting program after {} minutes'.format(train_time))
-                    sys.exit()
+                        print_datetime('exiting program after receiving SIGTERM.')
+                        sys.exit()
 
-            # Exiting based on iterations
-            # print rank and ckpt_args_dict
-            if args.exit_interval and iteration % args.exit_interval == 0:
-                if args.save and not saved_checkpoint:
+                if args.save and args.save_interval and \
+                iteration % args.save_interval == 0:
+                    # with record_function("save_checkpoint"):
                     save_checkpoint_and_time(iteration, model, optimizer,
                                             opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
-                torch.distributed.barrier()
-                print_datetime('exiting program at iteration {}'.format(iteration))
-                sys.exit()
+                    saved_checkpoint = True
+                    
+
+                # Exiting based on duration
+                if args.exit_duration_in_mins:
+                    train_time = (time.time() - _TRAIN_START_TIME) / 60.0
+                    done_cuda = get_accelerator().IntTensor(
+                        [train_time > args.exit_duration_in_mins])
+                    torch.distributed.all_reduce(
+                        done_cuda, op=torch.distributed.ReduceOp.MAX)
+                    done = done_cuda.item()
+                    if done:
+                        if not saved_checkpoint:
+                            save_checkpoint_and_time(iteration, model, optimizer,
+                                                    opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
+                        print_datetime('exiting program after {} minutes'.format(train_time))
+                        sys.exit()
+
+                # Exiting based on iterations
+                # print rank and ckpt_args_dict
+                if args.exit_interval and iteration % args.exit_interval == 0:
+                    if args.save and not saved_checkpoint:
+                        save_checkpoint_and_time(iteration, model, optimizer,
+                                                opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu)
+                    torch.distributed.barrier()
+                    print_datetime('exiting program at iteration {}'.format(iteration))
+                    sys.exit()
             
             
             end_time = time.perf_counter()

@@ -198,6 +198,8 @@ class DeepSpeedEngine(Module):
         config=None,
         config_class=None,
         dont_change_device=False,
+        ckpt_args_dict=None,
+        snapshot_stream=None
     ):
         super(DeepSpeedEngine, self).__init__()
         self.dont_change_device = dont_change_device
@@ -237,6 +239,9 @@ class DeepSpeedEngine(Module):
         self._is_gradient_accumulation_boundary = None
         self.scale_wrt_gas = None
         self.losses = 0.0
+        
+        self.ckpt_args_dict = ckpt_args_dict
+        self.snapshot_stream = snapshot_stream
 
         # for debug purposes - can then debug print: debug_get_module_name(module)
         debug_extract_module_and_param_names(model)
@@ -3135,27 +3140,33 @@ class DeepSpeedEngine(Module):
         if self._optimizer_has_ckpt_event_prologue():
             # Custom preparation for checkpoint save, if applicable
             self.optimizer.checkpoint_event_prologue()
-
+            
         rank = self.local_rank if self.use_node_local_storage() else self.global_rank
 
         # This is to make sure the checkpoint names are created without collision
         # There seems to be issue creating them in parallel
 
         # Ensure save_dir directory exists
-        if rank == 0:
-            self.checkpoint_engine.makedirs(save_dir, exist_ok=True)
-        dist.barrier()
-
+        
+        # When saving checkpoint in bubble, the barrier here will make the program stuck
+        # because different ranks execute save at different steps
+        # The creating job will be executed at Megatron/pretrain to make sure all ranks go through the barrier
+        if not ckpt_args_dict["save_checkpoint_in_bubble"]:
+            if rank == 0:
+                self.checkpoint_engine.makedirs(save_dir, exist_ok=True)
+            dist.barrier()
         if tag is None:
             tag = f"global_step{self.global_steps}"
 
         # Ensure tag is a string
         tag = str(tag)
         self.checkpoint_engine.create(tag)
-
         # Ensure checkpoint tag is consistent across ranks
-        self._checkpoint_tag_validation(tag)
-
+        # kxz: dist.all_reduce is used in tag validation, however this cannot work when save checkpoint in bubble
+        # Because the save checkpoint time for each rank is different
+        # However, we can make sure tag is None in our experiment, so canceling this does not matter
+        if not ckpt_args_dict["save_checkpoint_in_bubble"]:
+            self._checkpoint_tag_validation(tag)
         if self.has_moe_layers:
             self.save_non_zero_checkpoint = False
             self._create_checkpoint_file(save_dir, tag, False)
@@ -3188,7 +3199,9 @@ class DeepSpeedEngine(Module):
             with open(os.path.join(save_dir, 'latest'), 'w') as fd:
                 fd.write(tag)
 
-        dist.barrier()
+        # kxz: Is this barrier necessary? It cannot be used when using bubble ckpt saving
+        if not ckpt_args_dict["save_checkpoint_in_bubble"]:
+            dist.barrier()
 
         return True
 
@@ -3338,7 +3351,7 @@ class DeepSpeedEngine(Module):
 
     # self modified
     def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None):
-
+        print(f"Into _save_checkpoint, save_dir is {save_dir}")
         save_path = self._get_ckpt_name(save_dir, tag)
 
         zero_optimizer_state = self.zero_optimization() or self.bfloat16_enabled()
@@ -3353,8 +3366,7 @@ class DeepSpeedEngine(Module):
         module = self.module_state_dict(exclude_frozen_parameters=exclude_frozen_parameters)
         self._curr_ckpt_path = None
 
-        state = dict(module=module,
-                     buffer_names=self._get_buffer_names(),
+        state = dict(buffer_names=self._get_buffer_names(),
                      optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state else None,
                      param_shapes=self._get_zero_param_shapes() if self.optimizer and zero_optimizer_state else None,
                      frozen_param_shapes=self._get_zero_frozen_param_attributes(self._get_param_shape_func)

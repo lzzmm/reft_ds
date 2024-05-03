@@ -8,6 +8,7 @@ from types import MethodType
 import torch
 from deepspeed import comm as dist
 import copy
+import threading
 import math
 
 from deepspeed.utils import logger
@@ -81,6 +82,7 @@ class PipelineEngine(DeepSpeedEngine):
         ) < ZeroStageEnum.gradients, "ZeRO-2 and ZeRO-3 are incompatible with pipeline parallelism"
 
         # We schedule the all-reduces, so disable it in super().backward()
+        self.save_buffer = torch.zeros(4096, 2048, device="cpu").pin_memory()
         self.enable_backward_allreduce = False
         self.has_bool_tensors = has_bool_tensors
         self.eval_return_logits = False
@@ -1128,6 +1130,18 @@ class PipelineEngine(DeepSpeedEngine):
         #     optimizer_save_path = os.path.join(self.save_dir, tag, f"{time_stamp}_dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_optimizer_parity.pt")
         #     torch.save(self.param_parity_dict, param_save_path)
         #     torch.save(self.optimizer_parity_dict, optimizer_save_path)
+        
+    def _exec_save_checkpoint(self):
+        if self.ckpt_args_dict["save_checkpoint_in_bubble"]:
+            self.save_checkpoint(save_dir=self.ckpt_args_dict["save_dir"], client_state={}, ckpt_args_dict=self.ckpt_args_dict, snapshot_stream=self.snapshot_stream, iteration=self.global_steps)
+        # def tensor_copy():
+        #     with torch.cuda.stream(self.snapshot_stream):
+        #         for i in range(1000):
+        #             tensor = torch.randn(4096, 2048, device=torch.cuda.current_device())
+        #             self.save_buffer.copy_(tensor)
+        # thread = threading.Thread(target=tensor_copy)
+        # thread.start()
+        # pass
 
     def _exec_send_activations(self, buffer_id):
         if self.wall_clock_breakdown():
@@ -1511,6 +1525,7 @@ class PipelineEngine(DeepSpeedEngine):
         schedule.SendGrad: _exec_send_grads,
         schedule.RecvGrad: _exec_recv_grads,
         schedule.ComputeParity: _exec_compute_parity,
+        schedule.SaveCheckpoint: _exec_save_checkpoint
     }
 
     def _exec_schedule(self, pipe_schedule):
@@ -1522,16 +1537,19 @@ class PipelineEngine(DeepSpeedEngine):
         for i, step_cmds in enumerate(pipe_schedule):
             # Get the time stamp of month day hour minute
             # For each instruction in the step
+            step_start_time = time.perf_counter()
             for cmd in step_cmds:
                 if type(cmd) not in self._INSTRUCTION_MAP:
                     raise RuntimeError(f'{self.__class__.__name__} does not understand instruction {repr(cmd)}')
 
                 # Equivalent to: self._exec_forward_pass(buffer_id=0)
                 start_time = time.perf_counter()
-                # global_output.log_info(f"stage id {self.stage_id} step {i}, instruction {type(cmd).__name__} start")
+                global_output.log_info(f"stage id {self.stage_id} step {i}, instruction {type(cmd).__name__} start")
                 self._exec_instr = MethodType(self._INSTRUCTION_MAP[type(cmd)], self)
                 self._exec_instr(**cmd.kwargs)
                 end_time = time.perf_counter()
-                # global_output.log_info(f"stage id {self.stage_id} step {i}, instruction {type(cmd).__name__} end, step time cost: {end_time - start_time} seconds")
+                global_output.log_info(f"stage id {self.stage_id} step {i}, instruction {type(cmd).__name__} end, step time cost: {end_time - start_time} seconds")
                 
-            # global_output.log_info("")
+            step_end_time = time.perf_counter()
+                
+            global_output.log_info(f"stage id {self.stage_id} step {i} step time cost: {step_end_time - step_start_time} seconds\n")

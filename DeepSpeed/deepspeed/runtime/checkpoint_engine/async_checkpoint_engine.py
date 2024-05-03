@@ -46,45 +46,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
         new_dim_0_size = math.ceil(original_shape[0] / (chunk_num * (chunk_num - 1))) * (chunk_num - 1)
         new_shape = (new_dim_0_size, *original_shape[1:])
         return torch.empty(new_shape, device='cpu')
-    
-    # def get_state_dict_shape(self, state_dict):
-    #     stack = [(state_dict, None, None, None)]
-    #     while stack:
-    #         current, parent, key, tag = stack.pop(0)
-    #         if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
-    #             cpu_buffer = current.shape
-
-    #             if parent is not None:
-    #                 parent[key] = (cpu_buffer, current.shape)
-    #             else:
-    #                 self.state_dict_cpu = (cpu_buffer, current.shape)
-    #         elif isinstance(current, dict):
-    #             cpu_data = {}
-    #             if type(key) == str:
-    #                 if "embedding" in key:
-    #                     tag = "embedding"
-    #                 if "optimizer" == key:
-    #                     tag = "optimizer"
-    #             for k, v in current.items():
-    #                 stack.append((v, cpu_data, k, tag))
-    #             if parent is not None:
-    #                 parent[key] = cpu_data
-    #             else:
-    #                 self.state_dict_cpu = cpu_data
-    #         elif isinstance(current, list):
-    #             cpu_data = [None] * len(current)
-    #             for idx, item in enumerate(current):
-    #                 stack.append((item, cpu_data, idx, tag))
-    #             if parent is not None:
-    #                 parent[key] = cpu_data
-    #             else:
-    #                 self.state_dict_cpu = cpu_data
-    #         else:
-    #             if parent is not None:
-    #                 parent[key] = current # wait for copy
-    #                 # parent[key] = current
-    #             else:
-    #                 self.state_dict_cpu = current
         
     def __update_cpu_buffer(self, state_dict, ckpt_args_dict, is_zero):
         stack = [(state_dict, None, None, None)]
@@ -168,7 +129,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def create(self, tag):
         log_dist(f"[AsyncCkpt] Checkpoint {tag} is about to be saved!", ranks=[0])
 
-    def save(self, state_dict, path: str, device='cuda:0', use_copy_=True, snapshot_stream=torch.cuda.Stream(torch.cuda.current_device()), ckpt_args_dict={}, is_zero=False, dp_group_cpu=None, save_dir=None, iteration=None):
+    def save(self, state_dict, path: str, use_copy_=True, snapshot_stream=torch.cuda.Stream(torch.cuda.current_device()), ckpt_args_dict={}, is_zero=False, dp_group_cpu=None, save_dir=None, iteration=None):
         # Prepare cpu buffer if ckpt_args_dict['init_cpu_buffer'] = True
         self.save_dir = save_dir
         
