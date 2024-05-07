@@ -23,6 +23,7 @@ from typing import Callable, Dict, Union, Iterable
 import deepspeed
 
 from datetime import datetime
+import time
 import sys
 
 sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds/")
@@ -242,7 +243,7 @@ class DeepSpeedEngine(Module):
         
         self.ckpt_args_dict = ckpt_args_dict
         self.snapshot_stream = snapshot_stream
-
+        self.create_tensor = True
         # for debug purposes - can then debug print: debug_get_module_name(module)
         debug_extract_module_and_param_names(model)
 
@@ -2768,6 +2769,7 @@ class DeepSpeedEngine(Module):
                          load_module_only=False,
                          custom_load_fn=None):
         
+        
         def gather_complete_state_dict(state_dict, dp_group, dp_size):
             stack = [(state_dict, None, None, None)]
             device = torch.cuda.current_device()
@@ -2822,28 +2824,48 @@ class DeepSpeedEngine(Module):
                         root = current
                         
             return root
+         
 
         from deepspeed.runtime.state_dict_factory import SDLoaderFactory
+        if not (self.ckpt_args_dict["fail"] and torch.distributed.get_rank() not in self.ckpt_args_dict["fail_rank"]):
+            ckpt_list = self._get_all_ckpt_names(load_dir, tag)
+            sd_loader = SDLoaderFactory.get_sd_loader(ckpt_list, checkpoint_engine=self.checkpoint_engine)
+            
+            is_pipe_parallel = isinstance(self.module, PipelineModule)
 
-        ckpt_list = self._get_all_ckpt_names(load_dir, tag)
-        sd_loader = SDLoaderFactory.get_sd_loader(ckpt_list, checkpoint_engine=self.checkpoint_engine)
+            mp_rank = 0 if self.mpu is None else self.mpu.get_model_parallel_rank()
+            load_path, checkpoint, _ = sd_loader.load(self.mp_world_size, mp_rank, is_pipe_parallel=is_pipe_parallel)
 
-        is_pipe_parallel = isinstance(self.module, PipelineModule)
-
-        mp_rank = 0 if self.mpu is None else self.mpu.get_model_parallel_rank()
-        load_path, checkpoint, _ = sd_loader.load(self.mp_world_size, mp_rank, is_pipe_parallel=is_pipe_parallel)
-
-        if checkpoint is None:
-            return None, None
+            if checkpoint is None:
+                return None, None
+            
+        if self.ckpt_args_dict["fail"] and torch.distributed.get_rank() not in self.ckpt_args_dict["fail_rank"]:
+            # Load parity
+            param_parity_path = os.path.join(self.ckpt_args_dict["parity_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_param_parity.pt")
+            optimizer_save_path = os.path.join(self.ckpt_args_dict["parity_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_optimizer_parity.pt")
+            
+            param_parity_dict = torch.load(param_parity_path)
+            optimizer_parity_dict = torch.load(optimizer_save_path)
+            
+        try:
+            dp_group = self.mpu.get_data_parallel_group()
+            dp_size = self.mpu.get_data_parallel_world_size()
+            dp_rank = self.mpu.get_data_parallel_rank()
+            pipeline_parallel_size = self.mpu.get_pipeline_model_parallel_world_size()
+        except:
+            dp_group = self.mpu.get_data_parallel_group()
+            dp_size = self.mpu.get_data_parallel_world_size()
+            dp_rank = self.mpu.get_data_parallel_rank()
+            pipeline_parallel_size = self.mpu.get_pipe_parallel_world_size()
 
         fetch_z3_params = False
         if self.zero_optimization_partition_weights() and not load_optimizer_states:
+            # The condition entering this block is enabling zero 3
             checkpoint['module'] = get_fp32_state_dict_from_zero_checkpoint(load_dir)
             fetch_z3_params = True
 
-        if is_pipe_parallel:
-            # Pipeline parallelism uses this to load its own checkpoint files.
-            self._curr_ckpt_path = os.path.join(load_dir, tag)
+        if not self.ckpt_args_dict["fail"]:
+            checkpoint = gather_complete_state_dict(checkpoint, dp_group, dp_size)   
 
         if self.has_moe_layers:
             # print(checkpoint.keys())
@@ -2859,40 +2881,6 @@ class DeepSpeedEngine(Module):
                                                 num_experts=self.num_experts,
                                                 checkpoint_engine=self.checkpoint_engine)
         if not self.load_universal_checkpoint():
-            try:
-                dp_group = self.mpu.get_data_parallel_group()
-                dp_size = self.mpu.get_data_parallel_world_size()
-                dp_rank = self.mpu.get_data_parallel_rank()
-                pipeline_parallel_size = self.mpu.get_pipeline_model_parallel_world_size()
-            except:
-                dp_group = self.mpu.get_data_parallel_group()
-                dp_size = self.mpu.get_data_parallel_world_size()
-                dp_rank = self.mpu.get_data_parallel_rank()
-                pipeline_parallel_size = self.mpu.get_pipe_parallel_world_size()
-            # if pipeline_parallel_size > 1:
-            #     snapshot_tensors_dict = checkpoint['module']
-            # else:
-            #     snapshot_tensors_dict = checkpoint['module']['language_model']['encoder']
-            # # logger.info(f"dp_rank: {self.mpu.get_data_parallel_rank()} pp_rank {self.mpu.get_pipe_parallel_rank()} tp_rank {self.mpu.get_slice_parallel_rank()} snapshot_tensors_dict before: {snapshot_tensors_dict.keys()}")
-            # snapshot_tensors_dict_list = [None for _ in range(len(torch.distributed.get_process_group_ranks(dp_group)))]
-            
-            # dist.all_gather_object(snapshot_tensors_dict_list, snapshot_tensors_dict, group=dp_group)
-            
-            # for gathered_snapshot_tensors_dict in snapshot_tensors_dict_list:
-            #     for snapshot_tensor_name, snapshot_tensor in gathered_snapshot_tensors_dict.items():
-            #         if snapshot_tensor_name not in snapshot_tensors_dict:
-            #             snapshot_tensors_dict[snapshot_tensor_name] = snapshot_tensor
-            # timestamp = datetime.now().strftime('%m%d-%H%M')
-            # info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
-            # info_path0 = os.path.join(info_dir, "all_gather", f"{timestamp}_dp_{dp_rank}_before_all_gather_state_dict.txt")
-            # with open(info_path0, "w") as f:
-            #     f.write(str(checkpoint))
-            # sys.exit()    
-            checkpoint = gather_complete_state_dict(checkpoint, dp_group, dp_size)
-            # info_path1 = os.path.join(info_dir, "all_gather", f"{timestamp}_dp_{dp_rank}_after_all_gather_state_dict.txt")
-            # with open(info_path1, "w") as f:
-            #     f.write(str(checkpoint))
-            # sys.exit()            
             self.load_module_state_dict(checkpoint=checkpoint,
                                         strict=load_module_strict,
                                         custom_load_fn=custom_load_fn,
@@ -3121,7 +3109,8 @@ class DeepSpeedEngine(Module):
                 logger.warning(msg)
 
     # self modified
-    def save_checkpoint(self, save_dir, tag=None, client_state={}, save_latest=True, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None):
+    def save_checkpoint(self, save_dir, tag=None, client_state={}, save_latest=True, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None, 
+                        is_pipeline=False, bubble_id=None):
         """Save training checkpoint
 
         Arguments:
@@ -3184,11 +3173,11 @@ class DeepSpeedEngine(Module):
             self._save_checkpoint(save_dir,
                                   tag,
                                   client_state=client_state,
-                                  exclude_frozen_parameters=exclude_frozen_parameters, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration)
+                                  exclude_frozen_parameters=exclude_frozen_parameters, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=is_pipeline, bubble_id=bubble_id)
 
         if self.save_zero_checkpoint:
             self._create_zero_checkpoint_files(save_dir, tag)
-            self._save_zero_checkpoint(save_dir, tag, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration)
+            self._save_zero_checkpoint(save_dir, tag, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=is_pipeline, bubble_id=bubble_id) 
 
         if self._optimizer_has_ckpt_event_epilogue():
             self.optimizer.checkpoint_event_epilogue()
@@ -3350,7 +3339,7 @@ class DeepSpeedEngine(Module):
         return success
 
     # self modified
-    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None):
+    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None, is_pipeline=False, bubble_id=None):
         print(f"Into _save_checkpoint, save_dir is {save_dir}")
         save_path = self._get_ckpt_name(save_dir, tag)
 
@@ -3365,34 +3354,49 @@ class DeepSpeedEngine(Module):
         self._curr_ckpt_path = os.path.join(save_dir, tag)
         module = self.module_state_dict(exclude_frozen_parameters=exclude_frozen_parameters)
         self._curr_ckpt_path = None
-
-        state = dict(buffer_names=self._get_buffer_names(),
-                     optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state else None,
-                     param_shapes=self._get_zero_param_shapes() if self.optimizer and zero_optimizer_state else None,
-                     frozen_param_shapes=self._get_zero_frozen_param_attributes(self._get_param_shape_func)
-                     if save_frozen_param else None,
-                     shared_params=self._get_shared_params() if self.optimizer and zero_optimizer_state else None,
-                     frozen_param_fragments=self._get_zero_frozen_param_attributes(self._get_param_fragment_func)
-                     if save_frozen_param else None,
-                     lr_scheduler=self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None,
-                     data_sampler=self.training_dataloader.data_sampler.state_dict() if
-                     (self.training_dataloader is not None and self.curriculum_learning_enabled()) else None,
-                     random_ltd=self.random_ltd_scheduler.state_dict() if self.random_ltd_enabled() else None,
-                     sparse_tensor_module_names=self.sparse_tensor_module_names,
-                     skipped_steps=self.skipped_steps,
-                     global_steps=self.global_steps,
-                     global_samples=self.global_samples,
-                     dp_world_size=self.seq_dp_world_size,
-                     mp_world_size=self.mp_world_size,
-                     ds_config=self.config,
-                     ds_version=version)
+        
+        # if self.create_tensor:
+        #     state_create_start = time.perf_counter()
+        #     tensor_size = 409206784
+        #     chunk_num = 16 * 16 * 16 * 16
+        #     # Create a dict with key from 0 to 2, and value is a tensor with size tensor_size
+        #     self.state = {}
+        #     for i in range(3 * chunk_num):
+        #         self.state[i] = torch.randn(tensor_size // chunk_num, device='cuda')
+            
+        #     state_create_end = time.perf_counter()
+        #     print(f"state create time: {state_create_end - state_create_start}")
+        #     self.create_tensor = False
+        state = dict(module=module,
+                    buffer_names=self._get_buffer_names(),
+                    optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state else None,
+                    param_shapes=self._get_zero_param_shapes() if self.optimizer and zero_optimizer_state else None,
+                    frozen_param_shapes=self._get_zero_frozen_param_attributes(self._get_param_shape_func)
+                    if save_frozen_param else None,
+                    shared_params=self._get_shared_params() if self.optimizer and zero_optimizer_state else None,
+                    frozen_param_fragments=self._get_zero_frozen_param_attributes(self._get_param_fragment_func)
+                    if save_frozen_param else None,
+                    lr_scheduler=self.lr_scheduler.state_dict() if self.lr_scheduler is not None else None,
+                    data_sampler=self.training_dataloader.data_sampler.state_dict() if
+                    (self.training_dataloader is not None and self.curriculum_learning_enabled()) else None,
+                    random_ltd=self.random_ltd_scheduler.state_dict() if self.random_ltd_enabled() else None,
+                    sparse_tensor_module_names=self.sparse_tensor_module_names,
+                    skipped_steps=self.skipped_steps,
+                    global_steps=self.global_steps,
+                    global_samples=self.global_samples,
+                    dp_world_size=self.seq_dp_world_size,
+                    mp_world_size=self.mp_world_size,
+                    ds_config=self.config,
+                    ds_version=version)
         state.update(client_state)
 
         # if self.save_non_zero_checkpoint:
         log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
         if isinstance(self.checkpoint_engine, AsyncCheckpointEngine):
             print("checkpoint_engine type: AsyncCheckpointEngine")
-            self.checkpoint_engine.save(state, save_path, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration)
+            self.checkpoint_engine.save(state_dict=state, path=save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration)
+            if is_pipeline: 
+                self.checkpoint_engine.save(state_dict=state, path=save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=True, bubble_id=bubble_id)
         else:
             print("checkpoint_engine type: torchCheckpoint")
             self.checkpoint_engine.save(state, save_path)
@@ -3539,12 +3543,12 @@ class DeepSpeedEngine(Module):
             )
 
     # self modified
-    def _save_zero_checkpoint(self, save_path, tag, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None):
+    def _save_zero_checkpoint(self, save_path, tag, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None, is_pipeline=False, bubble_id=None):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
         save_dir = os.path.join(save_path, tag)
         # get_state_dict_shape(zero_sd, "zero_optimizer", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
-        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, is_zero=True, dp_group_cpu=dp_group_cpu, save_dir=save_dir, iteration=iteration)
+        self.checkpoint_engine.save(zero_sd, zero_checkpoint_name, f'cuda:{self.mpu.get_data_parallel_rank()}', ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, is_zero=True, dp_group_cpu=dp_group_cpu, save_dir=save_dir, iteration=iteration, is_pipeline=is_pipeline, bubble_id=bubble_id)
 
         if self.global_rank == 0:
             self._copy_recovery_script(save_path)

@@ -187,8 +187,8 @@ class SDLoaderBase(ABC):
         pass
 
 
-class MegatronSDLoader(SDLoaderBase):
 
+class MegatronSDLoader(SDLoaderBase):
     def __init__(self, ckpt_list, version, checkpoint_engine):
         super().__init__(ckpt_list, version, checkpoint_engine)
         """

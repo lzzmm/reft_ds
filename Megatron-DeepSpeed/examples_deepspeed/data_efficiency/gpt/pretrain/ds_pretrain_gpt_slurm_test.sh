@@ -27,14 +27,14 @@ seq_len=2048
 # init_std=0.02
 
 # GPT-3 Small 125M
-# model_size=0.125
-# num_layers=12
-# hidden_size=768
-# num_attn_heads=12
-# global_batch_size=256
-# lr=6.0e-4
-# min_lr=1.0e-6
-# init_std=0.02
+model_size=0.125
+num_layers=12
+hidden_size=768
+num_attn_heads=12
+global_batch_size=8
+lr=6.0e-4
+min_lr=1.0e-6
+init_std=0.02
 
 ## GPT-3 Medium 350M
 # model_size=0.35
@@ -67,14 +67,14 @@ seq_len=2048
 # init_std=0.013
 
 ## GPT-3 2.7B
-model_size=2.7
-num_layers=32
-hidden_size=2560
-num_attn_heads=32
-global_batch_size=16
-lr=1.6e-4
-min_lr=1.0e-6
-init_std=0.011
+# model_size=2.7
+# num_layers=32
+# hidden_size=2560
+# num_attn_heads=32
+# global_batch_size=16
+# lr=1.6e-4
+# min_lr=1.0e-6
+# init_std=0.011
 
 ## GPT-3 6.7B
 # model_size=6.7
@@ -144,12 +144,12 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=1
+mp_size=4
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=4
+pp_size=8
 # no_pp="true"
 no_pp="false"
 
@@ -161,8 +161,8 @@ zero_stage=0
 # num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
-num_node=1
-num_gpus=4
+num_node=4
+num_gpus=32
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
@@ -666,8 +666,8 @@ fi
 # export NCCL_DEBUG=INFO
 # deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
 # deepspeed --hostfile=hostfile --include=10.120.20.161:4,5,6,7@10.120.20.185:0,1,2,3  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# JOB_ID=1010
-# HOST_NODE_ADDR=gpu1-19
+JOB_ID=1010
+HOST_NODE_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n 1)
 # echo "hostname: $(hostname)"
 # if [[ "$(hostname)" == "gpu1-19" ]]; then
 #     export CUDA_VISIBLE_DEVICES=0
@@ -678,8 +678,8 @@ fi
 #     exit 1
 
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
-# torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+torchrun --nnodes=4 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --include="localhost:4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+# deepspeed --include="localhost:1,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --hostfile=hostfile --include="gpu1-25:2,3,4,5@gpu1-22:1,3,4,5" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log

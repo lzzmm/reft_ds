@@ -242,18 +242,34 @@ class TrainSchedule(PipeSchedule):
                 cmds.append(ReduceGrads())
                 cmds.append(OptimizerStep())
                 
-            if self.stage_id != 0 and step_id == (self.stage_id - 1):
-                cmds.append(ComputeParity(is_pre_bubble=True))
-                # if self.stage_id >= (2 * self.num_stages - 2 * self.stage_id - 2):
-                #     cmds.append(SaveCheckpoint())
+            # if self.stage_id != 0 and self.stage_id != (self.num_stages - 1):
+            #     if step_id == (self.stage_id - 1):
+            #         cmds.append(ComputeParity())
+            #         cmds.append(SaveCheckpoint(bubble_id=0))
+            #     if step_id == (2 * self.num_stages - self.stage_id - 2):
+            #         cmds.append(SaveCheckpoint(bubble_id=1))
+            #     if (step_id - (self.stage_id + 2 * self.micro_batches - 1)) > 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) % 2 == 0:
+            #         cmds.append(SaveCheckpoint(bubble_id=((step_id - (self.stage_id + 2 * self.micro_batches - 1)) / 2 + 2)))
+                    
+            # if self.stage_id == (self.num_stages - 1):
+            #     if step_id == (self.stage_id - 1):
+            #         cmds.append(ComputeParity())
+            #         cmds.append(SaveCheckpoint(bubble_id=0))
+            #     if step_id == (self.num_stages + 2 * self.micro_batches - 2):
+            #         cmds.append(SaveCheckpoint(bubble_id=1))
                 
-            if self.stage_id != (self.stages - 1) and step_id == (2 * self.stages - self.stage_id -2):
-                cmds.append(ComputeParity(is_pre_bubble=False))
-                # if self.stage_id < (2 * self.num_stages - 2 * self.stage_id - 2):
-                #     cmds.append(SaveCheckpoint())
+            # if self.stage_id == 0:
+            #     if step_id == (2 * self.num_stages - 2):
+            #         cmds.append(ComputeParity(is_pre_bubble=False))
+            #         cmds.append(SaveCheckpoint(bubble_id=0))
+                    
+            #     if (step_id - (self.stage_id + 2 * self.micro_batches - 1)) > 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) % 2 == 0:
+            #         cmds.append(SaveCheckpoint(bubble_id=((step_id - (self.stage_id + 2 * self.micro_batches - 1)) / 2 + 1)))
+                    
+                
             # checkpoint after warmup
-            if step_id == (2 * self.num_stages - self.stage_id):
-                cmds.append(SaveCheckpoint())
+            # if step_id == (2 * self.num_stages - self.stage_id):
+            #     cmds.append(SaveCheckpoint())
             # Prepare state for next time
             prev_micro_batch_id = micro_batch_id
             yield cmds
