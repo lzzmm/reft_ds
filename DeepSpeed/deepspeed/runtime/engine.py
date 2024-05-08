@@ -2789,8 +2789,14 @@ class DeepSpeedEngine(Module):
                 pass
             
     def gather_parity_state_dict_failed_node(self, state_dict):
-        def restore_tensor_with_parity(parity_list, shard_tensor_list, dp_rank):
-            int_tensors = [tensor.view(torch.int32) for tensor in shard_tensor_list]
+        def restore_tensor_with_parity(parity, shard_tensor_list):
+            int_shard_tensor_list = [shard.view(torch.int32) for shard in shard_tensor_list]
+            restored_int_tensor = parity
+            for shard in int_shard_tensor_list:
+                restored_int_tensor = restored_int_tensor ^ shard
+            restored_tensor = restored_int_tensor.view(torch.float32)
+            return restored_tensor
+    
         dp_group = self.mpu.get_data_parallel_group()
         dp_size = self.mpu.get_data_parallel_world_size()
         dp_rank = self.mpu.get_data_parallel_rank()
@@ -2813,7 +2819,7 @@ class DeepSpeedEngine(Module):
                 parity_list = [torch.zeros(parity_shape, device=torch.cuda.current_device()) for _ in range(dp_size)]
                 torch.distributed.gather(parity_tensor, gather_list=parity_list, dst=dp_rank, group=dp_group)
                 # Recover the original tensor
-                original_tensor_shards = []
+                original_tensor_shard_list = []
                 for i in range(dp_size):
                     if i != failed_rank_index:
                         # The shard tensors from each rank to form this parity
@@ -2824,10 +2830,15 @@ class DeepSpeedEngine(Module):
                                 # Take the parity part of the tensor to recover the failed rank part in the parity
                                 j_tensor_shard = tensor_shard_list[j]
                                 j_tensor_parity_shard_list = torch.chunk(j_tensor_shard, dp_size - 1, dim=0)
+                                if j > i:
+                                    parity_shard_list.append(j_tensor_parity_shard_list[i])
+                                else:
+                                    parity_shard_list.append(j_tensor_parity_shard_list[i - 1])
                                 
-                                
+                        # Recover the failed rank part in the parity
+                        original_tensor_shard = restore_tensor_with_parity(parity_tensor, parity_shard_list)
+                        original_tensor_shard_list.append(original_tensor_shard)
                         
-            
             
     def all_gather_complete_state_dict(self, state_dict):
         dp_group = self.mpu.get_data_parallel_group()
