@@ -60,7 +60,9 @@ try:
 except (ImportError, ModuleNotFoundError):
     wandb = None
     
-sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds")
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+
+sys.path.append(root_path)
 import config as global_config
 import output as global_output
 
@@ -1314,7 +1316,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     global_output.init_logger()
     
     def trace_handler(p):
-        trace_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/trace"
+        trace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../examples_deepspeed/data_efficiency/gpt/trace'))
         trace_dir = os.path.join(trace_dir, global_output.init_time_stamp)
         # trace_dir = os.path.join(args.save, "trace_training")
         os.makedirs(trace_dir, exist_ok=True)

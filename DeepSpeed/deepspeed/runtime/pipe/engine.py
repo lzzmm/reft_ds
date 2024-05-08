@@ -32,7 +32,8 @@ from .module import PipelineModule, PipelineError
 from . import p2p
 from . import schedule
 import sys
-sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds")
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
+sys.path.append(root_path)
 import config as global_config
 import output as global_output
 from datetime import datetime

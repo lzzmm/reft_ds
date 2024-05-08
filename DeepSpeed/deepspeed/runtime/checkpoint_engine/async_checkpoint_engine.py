@@ -20,7 +20,8 @@ import torch.distributed as dist
 from multiprocessing import Process
 import time
 import math
-sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds")
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
+sys.path.append(root_path)
 from output import get_state_dict_shape
 
    

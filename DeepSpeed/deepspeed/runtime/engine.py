@@ -26,7 +26,8 @@ from datetime import datetime
 import time
 import sys
 
-sys.path.append("/hpc2hdd/home/zli755/xueze/reft_ds/")
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+sys.path.append(root_path)
 from output import get_state_dict_shape
 
 from deepspeed import comm as dist
