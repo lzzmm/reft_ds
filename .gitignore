@@ -88,6 +88,8 @@ bookcorpus_data/
 /*.log
 /*.sh
 /*.py
+!/config.py
+!/output.py
 /apex/
 
 my_test
