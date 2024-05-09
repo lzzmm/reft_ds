@@ -9,7 +9,7 @@ init_time_stamp = None
 
 def init_logger(init_msg=None):
     global logger_file, init_time_stamp
-    info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/log_info"
+    info_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/log_info'))
     if dist.get_rank() == 0:
         init_time_stamp = datetime.now().strftime('%m%d-%H%M')
         if not os.path.exists(os.path.join(info_dir, init_time_stamp)):
@@ -75,7 +75,7 @@ def get_state_dict_shape(state_dict, info_name, dp_rank, pp_rank, tp_rank, zero_
                 
                 
     timestamp = datetime.now().strftime('%m%d-%H%M')
-    info_dir = os.path.join("/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/", info_name)
+    info_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/log_info', info_name))
     # create this directory if it does not exist
     if not os.path.exists(info_dir):
         os.makedirs(info_dir)
