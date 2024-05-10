@@ -9,7 +9,8 @@ init_time_stamp = None
 
 def init_logger(init_msg=None):
     global logger_file, init_time_stamp
-    info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/log_info"
+    info_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/log_info'))
+    print(f"info_dir: {info_dir}")
     if dist.get_rank() == 0:
         init_time_stamp = datetime.now().strftime('%m%d-%H%M')
         if not os.path.exists(os.path.join(info_dir, init_time_stamp)):

@@ -1061,7 +1061,7 @@ class PipelineEngine(DeepSpeedEngine):
                 else:
                     param_root = current
                                 
-        if self.zero_optimization_stage() == 0 :
+        if self.zero_optimization_stage() == 0:
             optimizer_root = None
             stack = [(optimizer_parity_dict, None, None)]
             while stack:
@@ -1116,8 +1116,9 @@ class PipelineEngine(DeepSpeedEngine):
             optimizer_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_optimizer_parity.pt")
             param_save_process = Process(target=torch.save, args=(param_root, param_save_path))
             param_save_process.start()
-            optimizer_save_process = Process(target=torch.save, args=(optimizer_root, optimizer_save_path))
-            optimizer_save_process.start()
+            if self.zero_optimization_stage() == 0:
+                optimizer_save_process = Process(target=torch.save, args=(optimizer_root, optimizer_save_path))
+                optimizer_save_process.start()
                         
 
         
