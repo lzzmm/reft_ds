@@ -1536,7 +1536,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             
             
             end_time = time.perf_counter()
-            print(f"dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()} iter {iteration} time: {end_time - start_time}\n")
+            global_output.nprint(f"dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()} iter {iteration} time: {end_time - start_time}\n", "green")
             
             if prof_train:
                 p.step()

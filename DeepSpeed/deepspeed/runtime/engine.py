@@ -28,7 +28,7 @@ import sys
 
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 sys.path.append(root_path)
-from output import get_state_dict_shape
+from output import get_state_dict_shape, nprint
 
 from deepspeed import comm as dist
 from deepspeed.runtime.utils import see_memory_usage, DummyOptim
@@ -3411,6 +3411,7 @@ class DeepSpeedEngine(Module):
         if not ckpt_args_dict["save_checkpoint_in_bubble"]:
             self._checkpoint_tag_validation(tag)
         if self.has_moe_layers:
+            nprint("Saving MoE checkpoint", "blue")
             self.save_non_zero_checkpoint = False
             self._create_checkpoint_file(save_dir, tag, False)
             self._save_moe_checkpoint(save_dir,
@@ -3594,7 +3595,6 @@ class DeepSpeedEngine(Module):
 
     # self modified
     def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, ckpt_args_dict={}, snapshot_stream=None, dp_group_cpu=None, iteration=None, is_pipeline=False, bubble_id=None):
-        print(f"Into _save_checkpoint, save_dir is {save_dir}")
         save_path = self._get_ckpt_name(save_dir, tag)
 
         zero_optimizer_state = self.zero_optimization() or self.bfloat16_enabled()
@@ -3647,12 +3647,11 @@ class DeepSpeedEngine(Module):
         # if self.save_non_zero_checkpoint:
         log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
         if isinstance(self.checkpoint_engine, AsyncCheckpointEngine):
-            print("checkpoint_engine type: AsyncCheckpointEngine")
-            self.checkpoint_engine.save(state_dict=state, path=save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration)
             if is_pipeline: 
                 self.checkpoint_engine.save(state_dict=state, path=save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=True, bubble_id=bubble_id)
+            else:
+                self.checkpoint_engine.save(state_dict=state, path=save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration)
         else:
-            print("checkpoint_engine type: torchCheckpoint")
             self.checkpoint_engine.save(state, save_path)
 
     def _get_buffer_names(self):

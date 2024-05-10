@@ -3,9 +3,37 @@ from datetime import datetime
 import os
 import config
 import torch.distributed as dist
+from colorama import init, Fore, Style
 
 logger_file = None
 init_time_stamp = None
+
+def nprint(message, color):
+    """
+    Prints a message with a specified color using the colorama library.
+
+    Args:
+        message (str): The message to be printed.
+        color (str): The name of the color ('red', 'green', 'yellow', etc.).
+    """
+    # Define a dictionary mapping color names to colorama styles
+    colors = {
+        'red': Fore.RED,
+        'green': Fore.GREEN,
+        'yellow': Fore.YELLOW,
+        'blue': Fore.BLUE,
+        'magenta': Fore.MAGENTA,
+        'cyan': Fore.CYAN,
+        'white': Fore.WHITE,
+        'black': Fore.BLACK
+    }
+
+    # Get the selected color or default to white if the color is not found
+    selected_color = colors.get(color.lower(), Fore.WHITE)
+
+    # Print the message in the selected color
+    print(f"{selected_color}{message}{Style.RESET_ALL}")
+
 
 def init_logger(init_msg=None):
     global logger_file, init_time_stamp
