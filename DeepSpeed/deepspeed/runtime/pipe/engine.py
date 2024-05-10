@@ -1327,6 +1327,8 @@ class PipelineEngine(DeepSpeedEngine):
             self.timers(PIPE_RECV_GRAD_TIMER).stop()
 
     def _exec_optimizer_step(self, lr_kwargs=None):
+        for snapshot_thread in self.checkpoint_engine.snapshot_thread_list:
+            snapshot_thread.join()
         if self.wall_clock_breakdown():
             self.timers(STEP_MICRO_TIMER).start()
             self.timers(STEP_GLOBAL_TIMER).start()

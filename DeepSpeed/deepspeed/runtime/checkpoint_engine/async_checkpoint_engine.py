@@ -46,6 +46,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.zero_total_tensor_numel = 0
         self.total_bubble_time = 0
         self.bubble_time_list = []
+        self.snapshot_thread_list = []
         
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
@@ -325,6 +326,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
             )
             snapshot_thread.start()
+            self.snapshot_thread_list.append(snapshot_thread)
         else:
             logger.info(f"[AsyncCkpt] Not using concurrency.")
             self._snapshot_thread(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration,  is_pipeline, bubble_id)

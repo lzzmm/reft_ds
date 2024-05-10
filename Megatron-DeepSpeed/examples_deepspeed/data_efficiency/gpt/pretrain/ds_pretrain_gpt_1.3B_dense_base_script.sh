@@ -27,14 +27,14 @@ seq_len=2048
 # init_std=0.02
 
 # GPT-3 Small 125M
-# model_size=0.125
-# num_layers=12
-# hidden_size=768
-# num_attn_heads=12
-# global_batch_size=256
-# lr=6.0e-4
-# min_lr=1.0e-6
-# init_std=0.02
+model_size=0.125
+num_layers=12
+hidden_size=768
+num_attn_heads=12
+global_batch_size=16
+lr=6.0e-4
+min_lr=1.0e-6
+init_std=0.02
 
 ## GPT-3 Medium 350M
 # model_size=0.35
@@ -51,7 +51,7 @@ seq_len=2048
 # num_layers=24
 # hidden_size=1536
 # num_attn_heads=16
-# global_batch_size=32
+# global_batch_size=16
 # lr=2.5e-4
 # min_lr=1.0e-6
 # init_std=0.015
@@ -67,14 +67,14 @@ seq_len=2048
 # init_std=0.013
 
 ## GPT-3 2.7B
-model_size=2.7
-num_layers=32
-hidden_size=2560
-num_attn_heads=32
-global_batch_size=16
-lr=1.6e-4
-min_lr=1.0e-6
-init_std=0.011
+# model_size=2.7
+# num_layers=32
+# hidden_size=2560
+# num_attn_heads=32
+# global_batch_size=16
+# lr=1.6e-4
+# min_lr=1.0e-6
+# init_std=0.011
 
 ## GPT-3 6.7B
 # model_size=6.7
@@ -119,7 +119,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=20
+train_iters=3
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -680,6 +680,6 @@ fi
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --include="localhost:2,3,4,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --include="localhost:4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --hostfile=hostfile --include="gpu1-25:2,3,4,5@gpu1-22:1,3,4,5" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
