@@ -214,50 +214,82 @@ class AsyncCheckpointEngine(CheckpointEngine):
             loop.close()
         end_time = time.time()
         print(f"parity time: {end_time - start_time}\n")
-    async def _calculate_parity(self, state_dict, parity_stream, ckpt_args_dict):
-        def compute_xor(*gpu_tensors): 
+    def compute_parity(self, state_dict, ckpt_args_dict, is_optimizer, iteration) :
+        parity_thread = threading.Thread(
+            target=self.compute_parity_thread,
+            args=(state_dict, ckpt_args_dict, is_optimizer, iteration)
+        )
+        parity_thread.start()
+        self.snapshot_thread_list.append(parity_thread)
+        
+    def compute_parity_thread(self, state_dict, ckpt_args_dict, is_optimizer, iteration):
+        def compute_xor(*gpu_tensors):
+            assert torch.cuda.is_available(), "CUDA is not available. This function requires a GPU."  
             int_tensors = [tensor.view(torch.int32) for tensor in gpu_tensors]   
             parity = torch.zeros_like(int_tensors[0])
             for tensor in int_tensors:
                 parity ^= tensor
                 
             return parity
-        
-        # print rank and ckpt_args_dict
-        logger.info(f"rank: {dist.get_rank()}, ckpt_args_dict: {ckpt_args_dict}")
-        if ckpt_args_dict['pipeline_model_parallel_size'] > 1:
-            start_num = 2
-        else:
-            start_num = 0
-        model_params_dict = state_dict['module']['language_model']['encoder']
-        # Obtain the layers current rank is responsible for calculating parity
-        dp_rank = ckpt_args_dict['data_parallel_rank']
-        assert ckpt_args_dict['num_layers'] % ckpt_args_dict['data_parallel_size'] == 0
-        layers_per_rank = ckpt_args_dict['num_layers'] // ckpt_args_dict['data_parallel_size']
-        parity_layer_num_list = []
-        for i in range(dp_rank - 1): # For the nodes' dp_rank smaller than current dp_rank
-            parity_layer_num_list.append(start_num + i * layers_per_rank + dp_rank - 1)
-        for i in range(dp_rank + 1, ckpt_args_dict['num_layers']): # For the nodes' dp_rank larger than current dp_rank
-            parity_layer_num_list.append(start_num + i * layers_per_rank + dp_rank)
-        
-        parity_tensor_dict_list = [{} for i in range(len(parity_layer_num_list))]
-        # Traverse model_params_dict keys, and if parity_layer_num_list[0] is in the key, then add the key and tensor to the parity_tensor_dict, do this until the current key is not in parity_layer_num_list[0], delete parity_layer_num_list[0] and use the next number to compare with the key, continue until parity_layer_num_list is empty
-        # print("model_params_dict", model_params_dict.keys())
-        # logger.info(f"dp_rank: {dp_rank}, parity_layer_num_list: {parity_layer_num_list}")
-        for key, tensor in model_params_dict.items():
-            for i, layer_num in enumerate(parity_layer_num_list):
-                if str(layer_num) in key:  # This checks for the layer number in the key more robustly
-                    parity_tensor_dict_list[i][key] = tensor
-                    break  # Move to the next key once a match is found, improving efficiency
-
-        for i in range(len(parity_tensor_dict_list)):
-            logger.info(f"dp_rank: {dp_rank}, parity_tensor_dict_list[{i}]: {parity_tensor_dict_list[i].keys()}")
-        # Calculate parity
-        # with torch.cuda.stream(parity_stream):
-        #     parity_tensors = [tensor for tensor in parity_tensor_dict_list.values()]
-        #     parity = compute_xor(*parity_tensors)
-        #     return parity
-            
+        root = None
+        dp_size = ckpt_args_dict["data_parallel_size"]
+        dp_rank = ckpt_args_dict["data_parallel_rank"]
+        stack = [(state_dict, None, None)]
+        while stack:
+            current, parent, key = stack.pop(0)
+            if isinstance(current, torch.Tensor):
+                # calculate the parity of this tensor for the current dp rank
+                shape = current.shape
+                padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1)))
+                padding = [0] * (2 * (current.dim() - 1))
+                padding = padding + [0, padded_shape_dim_0 - shape[0]]
+                padded_current_tensor = torch.nn.functional.pad(current, padding)
+                tensor_shards = padded_current_tensor.chunk(dp_size * (dp_size - 1), dim=0)
+                # Figure out the shards participating the parity computation based on dp rank
+                current_parity_shards = []
+                # i is the dp rank to be taken shards
+                for i in range(dp_size):
+                    if i != dp_rank:
+                        current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
+                parity_buffer = compute_xor(*current_parity_shards)
+                    
+                if parent is not None:
+                    parent[key] = parity_buffer
+                else:
+                    root = parity_buffer
+            elif isinstance(current, dict):
+                parity_buffer = {}
+                for k, v in current.items():
+                    stack.append((v, parity_buffer, k))
+                if parent is not None:
+                    parent[key] = parity_buffer
+                else:
+                    root = parity_buffer
+            elif isinstance(current, list):
+                parity_buffer = [None] * len(current)
+                for idx, item in enumerate(current):
+                    stack.append((item, parity_buffer, idx))
+                if parent is not None:
+                    parent[key] = parity_buffer
+                else:
+                    root = parity_buffer
+            else:
+                if parent is not None:
+                    parent[key] = None # wait for copy
+                    # parent[key] = current
+                else:
+                    root = current
+                    
+        if ckpt_args_dict["enable_save"]:
+            tag = f"global_step{iteration}"
+            if not is_optimizer:
+                param_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
+                param_save_process = Process(target=torch.save, args=(root, param_save_path))
+                param_save_process.start()
+            else:
+                optimizer_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_optimizer_parity.pt")
+                optimizer_save_process = Process(target=torch.save, args=(root, optimizer_save_path))
+                optimizer_save_process.start()
             
     def construct_scatter_dict(self, ckpt_args_dict):
         stack = [(self.zero_state_dict_cpu, None, None, None)]

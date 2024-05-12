@@ -1000,125 +1000,12 @@ class PipelineEngine(DeepSpeedEngine):
             raise NotImplementedError(f'Could not receive type {type(recv_type)}')
         
     def _exec_compute_parity(self):
-        def compute_xor(*gpu_tensors):
-            assert torch.cuda.is_available(), "CUDA is not available. This function requires a GPU."  
-            int_tensors = [tensor.view(torch.int32) for tensor in gpu_tensors]   
-            parity = torch.zeros_like(int_tensors[0])
-            for tensor in int_tensors:
-                parity ^= tensor
-                
-            return parity
-        
         param_parity_dict = self.module.state_dict()
-        optimizer_parity_dict = self.optimizer.state_dict()
-        dp_rank = self.mpu.get_data_parallel_rank()
-        dp_size = self.mpu.get_data_parallel_world_size()
-        # In pre bubble time, param dict must be processed. And if it is not finished in pre bubble, it should also be processed in post bubble time
-        param_root = None
-        stack = [(param_parity_dict, None, None)]
-        while stack:
-            current, parent, key = stack.pop(0)
-            if isinstance(current, torch.Tensor):
-                # calculate the parity of this tensor for the current dp rank
-                shape = current.shape
-                padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1)))
-                padding = [0] * (2 * (current.dim() - 1))
-                padding = padding + [0, padded_shape_dim_0 - shape[0]]
-                padded_current_tensor = torch.nn.functional.pad(current, padding)
-                tensor_shards = padded_current_tensor.chunk(dp_size * (dp_size - 1), dim=0)
-                # Figure out the shards participating the parity computation based on dp rank
-                current_parity_shards = []
-                # i is the dp rank to be taken shards
-                for i in range(dp_size):
-                    if i != dp_rank:
-                        current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
-                parity_buffer = compute_xor(*current_parity_shards)
-                    
-                if parent is not None:
-                    parent[key] = parity_buffer
-                else:
-                    param_root = parity_buffer
-            elif isinstance(current, dict):
-                parity_buffer = {}
-                for k, v in current.items():
-                    stack.append((v, parity_buffer, k))
-                if parent is not None:
-                    parent[key] = parity_buffer
-                else:
-                    param_root = parity_buffer
-            elif isinstance(current, list):
-                parity_buffer = [None] * len(current)
-                for idx, item in enumerate(current):
-                    stack.append((item, parity_buffer, idx))
-                if parent is not None:
-                    parent[key] = parity_buffer
-                else:
-                    param_root = parity_buffer
-            else:
-                if parent is not None:
-                    parent[key] = None # wait for copy
-                    # parent[key] = current
-                else:
-                    param_root = current
-                                
+        self.checkpoint_engine.compute_parity(param_parity_dict, self.ckpt_args_dict, False, self.global_steps)
         if self.zero_optimization_stage() == 0:
-            optimizer_root = None
-            stack = [(optimizer_parity_dict, None, None)]
-            while stack:
-                current, parent, key = stack.pop(0)
-                if isinstance(current, torch.Tensor):
-                    # calculate the parity of this tensor for the current dp rank
-                    shape = current.shape
-                    padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1)))
-                    padding = [0] * (2 * (current.dim() - 1))
-                    padding = padding + [0, padded_shape_dim_0 - shape[0]]
-                    padded_current_tensor = torch.nn.functional.pad(current, padding)
-                    tensor_shards = padded_current_tensor.chunk(dp_size * (dp_size - 1), dim=0)
-                    # Figure out the shards participating the parity computation based on dp rank
-                    current_parity_shards = []
-                    # i is the dp rank to be taken shards
-                    for i in range(dp_size):
-                        if i != dp_rank:
-                            current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
-                    parity_buffer = compute_xor(*current_parity_shards)
-                        
-                    if parent is not None:
-                        parent[key] = parity_buffer
-                    else:
-                        optimizer_root = parity_buffer
-                elif isinstance(current, dict):
-                    parity_buffer = {}
-                    for k, v in current.items():
-                        stack.append((v, parity_buffer, k))
-                    if parent is not None:
-                        parent[key] = parity_buffer
-                    else:
-                        optimizer_root = parity_buffer
-                elif isinstance(current, list):
-                    parity_buffer = [None] * len(current)
-                    for idx, item in enumerate(current):
-                        stack.append((item, parity_buffer, idx))
-                    if parent is not None:
-                        parent[key] = parity_buffer
-                    else:
-                        optimizer_root = parity_buffer
-                else:
-                    if parent is not None:
-                        parent[key] = None # wait for copy
-                        # parent[key] = current
-                    else:
-                        optimizer_root = current
-                        
-        if self.ckpt_args_dict["enable_save"]:
-            tag = f"global_step{self.global_steps}"
-            time_stamp = datetime.now().strftime("%m%d-%H%M%S")
-            param_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_param_parity.pt")
-            optimizer_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_optimizer_parity.pt")
-            param_save_process = Process(target=torch.save, args=(param_root, param_save_path))
-            param_save_process.start()
-            if self.zero_optimization_stage() == 0:
-                optimizer_save_process = Process(target=torch.save, args=(optimizer_root, optimizer_save_path))
-                optimizer_save_process.start()
+            optimizer_parity_dict = self.optimizer.state_dict()
+            self.checkpoint_engine.compute_parity(optimizer_parity_dict, self.ckpt_args_dict, True, self.global_steps)
+
                         
 
         

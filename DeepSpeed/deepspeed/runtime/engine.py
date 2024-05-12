@@ -3429,7 +3429,10 @@ class DeepSpeedEngine(Module):
                                   tag,
                                   client_state=client_state,
                                   exclude_frozen_parameters=exclude_frozen_parameters, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=is_pipeline, bubble_id=bubble_id)
-
+            self.checkpoint_engine.compute_parity(self.module.state_dict(), ckpt_args_dict, is_optimizer=False, iteration=iteration)
+            if self.zero_optimization_stage() == 0:
+                self.checkpoint_engine.compute_parity(self.optimizer.state_dict(), ckpt_args_dict, is_optimizer=True, iteration=iteration)
+            
         if self.save_zero_checkpoint:
             self._create_zero_checkpoint_files(save_dir, tag)
             self._save_zero_checkpoint(save_dir, tag, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=is_pipeline, bubble_id=bubble_id) 
