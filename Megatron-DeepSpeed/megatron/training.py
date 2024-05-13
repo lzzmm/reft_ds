@@ -179,9 +179,11 @@ def pretrain(train_valid_test_dataset_provider,
     ckpt_args_dict['pre_alloc'] = args.prealloc
     ckpt_args_dict['save_checkpoint_in_bubble'] = args.save_checkpoint_in_bubble
     ckpt_args_dict['save_dir'] = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
+    ckpt_args_dict['recovery_dir'] = os.path.join(args.recovery_dir, datetime.now().strftime("%m%d-%H%M"))
     if args.save_checkpoint_in_bubble:
         if dist.get_rank() == 0:
             os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
+            os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
         dist.barrier()
     if args.deepspeed:
         args.deepspeed_config_dict = _create_ds_config_dict()
@@ -1536,7 +1538,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             
             
             end_time = time.perf_counter()
-            print(f"dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()} iter {iteration} time: {end_time - start_time}\n")
+            global_output.nprint(f"dp_{mpu.get_data_parallel_rank()}_pp_{mpu.get_pipeline_model_parallel_rank()}_tp_{mpu.get_tensor_model_parallel_rank()} iter {iteration} time: {end_time - start_time}\n", "green")
             
             if prof_train:
                 p.step()

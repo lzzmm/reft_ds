@@ -149,7 +149,11 @@ mp_size=2
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
+<<<<<<< HEAD
 pp_size=4
+=======
+pp_size=1
+>>>>>>> parallel_test
 # no_pp="true"
 no_pp="false"
 
@@ -161,8 +165,13 @@ zero_stage=0
 # num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
+<<<<<<< HEAD
 num_node=1
 num_gpus=8
+=======
+num_node=2
+num_gpus=2
+>>>>>>> parallel_test
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))

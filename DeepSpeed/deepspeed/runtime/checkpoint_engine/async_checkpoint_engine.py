@@ -17,12 +17,12 @@ from datetime import datetime
 import time
 from torch.profiler import profile, record_function
 import torch.distributed as dist
-from multiprocessing import Process
+import multiprocessing
 import time
 import math
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
 sys.path.append(root_path)
-from output import get_state_dict_shape
+from output import get_state_dict_shape, nprint
 
    
 class AsyncCheckpointEngine(CheckpointEngine):
@@ -46,7 +46,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.zero_total_tensor_numel = 0
         self.total_bubble_time = 0
         self.bubble_time_list = []
-        
+        self.snapshot_thread_list = []
+        self.snapshot_size = 0
+        self.zero_snapshot_size = 0
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
         # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
@@ -73,8 +75,10 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     continue
                 if not is_zero:
                     self.total_tensor_numel += current.numel()
+                    self.snapshot_size += current.element_size() * current.numel()
                 else:
                     self.zero_total_tensor_numel += current.numel()
+                    self.zero_snapshot_size += current.element_size() * current.numel()
                 chunk_num = ckpt_args_dict["data_parallel_size"]
                 if ckpt_args_dict["enable_sharding"] and ckpt_args_dict["data_parallel_size"] > 1 and not is_zero:
                     if ckpt_args_dict['enable_pin_memory']:
@@ -166,7 +170,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         print(f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} save checkpoint")
         # time stamp with month day hour minute second
         if self.print_flag:
-            info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
+            info_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info'))
             info_path = os.path.join(info_dir, f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_state_dict.txt")
             with open(info_path, "w") as f:
                 f.write(str(state_dict))
@@ -191,69 +195,84 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def commit(self, tag):
         logger.info(f"[AsyncCkpt] Checkpoint {tag} is ready now!")
         return True
-    def calculate_parity(self, state_dict, parity_stream, ckpt_args_dict):
-        logger.info(f"[AsyncCkpt] Calculating parity...")
-        
+    def compute_parity(self, state_dict, ckpt_args_dict, is_optimizer, iteration) :
         parity_thread = threading.Thread(
-            target=self._calculate_parity_thread,
-            args=(state_dict, parity_stream, ckpt_args_dict)
+            target=self.compute_parity_thread,
+            args=(state_dict, ckpt_args_dict, is_optimizer, iteration)
         )
         parity_thread.start()
-        return parity_thread
-    def _calculate_parity_thread(self, state_dict, parity_stream, ckpt_args_dict):
-        start_time = time.time()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._calculate_parity(state_dict, parity_stream, ckpt_args_dict))
-        finally:
-            loop.close()
-        end_time = time.time()
-        print(f"parity time: {end_time - start_time}\n")
-    async def _calculate_parity(self, state_dict, parity_stream, ckpt_args_dict):
-        def compute_xor(*gpu_tensors): 
+        self.snapshot_thread_list.append(parity_thread)
+        
+    def compute_parity_thread(self, state_dict, ckpt_args_dict, is_optimizer, iteration):
+        def compute_xor(*gpu_tensors):
+            assert torch.cuda.is_available(), "CUDA is not available. This function requires a GPU."  
             int_tensors = [tensor.view(torch.int32) for tensor in gpu_tensors]   
             parity = torch.zeros_like(int_tensors[0])
             for tensor in int_tensors:
                 parity ^= tensor
                 
             return parity
-        
-        # print rank and ckpt_args_dict
-        logger.info(f"rank: {dist.get_rank()}, ckpt_args_dict: {ckpt_args_dict}")
-        if ckpt_args_dict['pipeline_model_parallel_size'] > 1:
-            start_num = 2
-        else:
-            start_num = 0
-        model_params_dict = state_dict['module']['language_model']['encoder']
-        # Obtain the layers current rank is responsible for calculating parity
-        dp_rank = ckpt_args_dict['data_parallel_rank']
-        assert ckpt_args_dict['num_layers'] % ckpt_args_dict['data_parallel_size'] == 0
-        layers_per_rank = ckpt_args_dict['num_layers'] // ckpt_args_dict['data_parallel_size']
-        parity_layer_num_list = []
-        for i in range(dp_rank - 1): # For the nodes' dp_rank smaller than current dp_rank
-            parity_layer_num_list.append(start_num + i * layers_per_rank + dp_rank - 1)
-        for i in range(dp_rank + 1, ckpt_args_dict['num_layers']): # For the nodes' dp_rank larger than current dp_rank
-            parity_layer_num_list.append(start_num + i * layers_per_rank + dp_rank)
-        
-        parity_tensor_dict_list = [{} for i in range(len(parity_layer_num_list))]
-        # Traverse model_params_dict keys, and if parity_layer_num_list[0] is in the key, then add the key and tensor to the parity_tensor_dict, do this until the current key is not in parity_layer_num_list[0], delete parity_layer_num_list[0] and use the next number to compare with the key, continue until parity_layer_num_list is empty
-        # print("model_params_dict", model_params_dict.keys())
-        # logger.info(f"dp_rank: {dp_rank}, parity_layer_num_list: {parity_layer_num_list}")
-        for key, tensor in model_params_dict.items():
-            for i, layer_num in enumerate(parity_layer_num_list):
-                if str(layer_num) in key:  # This checks for the layer number in the key more robustly
-                    parity_tensor_dict_list[i][key] = tensor
-                    break  # Move to the next key once a match is found, improving efficiency
-
-        for i in range(len(parity_tensor_dict_list)):
-            logger.info(f"dp_rank: {dp_rank}, parity_tensor_dict_list[{i}]: {parity_tensor_dict_list[i].keys()}")
-        # Calculate parity
-        # with torch.cuda.stream(parity_stream):
-        #     parity_tensors = [tensor for tensor in parity_tensor_dict_list.values()]
-        #     parity = compute_xor(*parity_tensors)
-        #     return parity
-            
+        root = None
+        dp_size = ckpt_args_dict["data_parallel_size"]
+        dp_rank = ckpt_args_dict["data_parallel_rank"]
+        stack = [(state_dict, None, None)]
+        while stack:
+            current, parent, key = stack.pop(0)
+            if isinstance(current, torch.Tensor):
+                # calculate the parity of this tensor for the current dp rank
+                shape = current.shape
+                padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1)))
+                padding = [0] * (2 * (current.dim() - 1))
+                padding = padding + [0, padded_shape_dim_0 - shape[0]]
+                padded_current_tensor = torch.nn.functional.pad(current, padding)
+                tensor_shards = padded_current_tensor.chunk(dp_size * (dp_size - 1), dim=0)
+                # Figure out the shards participating the parity computation based on dp rank
+                current_parity_shards = []
+                # i is the dp rank to be taken shards
+                for i in range(dp_size):
+                    if i != dp_rank:
+                        current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
+                parity_buffer = compute_xor(*current_parity_shards)
+                
+                if parent is not None:
+                    parent[key] = parity_buffer.cpu()
+                else:
+                    root = parity_buffer
+            elif isinstance(current, dict):
+                parity_buffer = {}
+                for k, v in current.items():
+                    stack.append((v, parity_buffer, k))
+                if parent is not None:
+                    parent[key] = parity_buffer
+                else:
+                    root = parity_buffer
+            elif isinstance(current, list):
+                parity_buffer = [None] * len(current)
+                for idx, item in enumerate(current):
+                    stack.append((item, parity_buffer, idx))
+                if parent is not None:
+                    parent[key] = parity_buffer
+                else:
+                    root = parity_buffer
+            else:
+                if parent is not None:
+                    parent[key] = None # wait for copy
+                    # parent[key] = current
+                else:
+                    root = current
+                    
+        if ckpt_args_dict["enable_save"]:
+            tag = f"global_step{iteration}"
+            if not os.path.exists(os.path.join(ckpt_args_dict["recovery_dir"], tag)):
+                os.makedirs(os.path.join(ckpt_args_dict["recovery_dir"], tag))
+            if not is_optimizer:
+                param_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
+                param_save_process = multiprocessing.Process(target=torch.save, args=(root, param_save_path))
+                param_save_process.start()
+            else:
+                optimizer_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_optimizer_parity.pt")
+                optimizer_save_process = multiprocessing.Process(target=torch.save, args=(root, optimizer_save_path))
+                optimizer_save_process.start()
             
     def construct_scatter_dict(self, ckpt_args_dict):
         stack = [(self.zero_state_dict_cpu, None, None, None)]
@@ -325,9 +344,10 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
             )
             snapshot_thread.start()
+            self.snapshot_thread_list.append(snapshot_thread)
         else:
             logger.info(f"[AsyncCkpt] Not using concurrency.")
-            self._snapshot_thread(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration,  is_pipeline, bubble_id)
+            self._snapshot_thread(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
         # self.make_snapshot_sync(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict)
         # return snapshot_thread
         
@@ -338,9 +358,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
         start_time = time.perf_counter()
         if ckpt_args_dict['pure_torch_save']:
             torch.save(state_dict, self.path)
-            snapshot_size = os.path.getsize(self.path)
+            snapshot_size_in_MB = os.path.getsize(self.path) / 1024 / 1024
         else:
-            snapshot_size = self._make_snapshot(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict, is_zero, is_pipeline, bubble_id)
+            self._make_snapshot(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict, is_zero, is_pipeline, bubble_id)
             # if is_zero:
             #     print(f"Iteration {iteration} Into zero scatter logic")
             #     optimizer_state_dict_scatter_list = self.construct_scatter_dict(ckpt_args_dict)
@@ -364,13 +384,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
             #     self.save_scatter_dict_list(scatter_dict_list, ckpt_args_dict)
             #     print(f"Iteration {iteration} After save scatter dict list")
         end_time = time.perf_counter()
-        snapshot_size = snapshot_size / 1024 / 1024
-        print(f"Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size} MB, snapshot_speed: {snapshot_size / (end_time - start_time)} MB/s")
-        if is_zero:
-            logger.info(f"[AsyncCkpt] Iteration {iteration} Zero checkpoint done.")
-        else:
+        if not is_zero:
+            snapshot_size_in_MB = self.snapshot_size / 1024 / 1024
+            print(f"Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size_in_MB} MB, snapshot_speed: {snapshot_size_in_MB / (end_time - start_time)} MB/s")
             print(f"[AsyncCkpt] Iteration {iteration} Snapshot done.")
-
+        else:
+            snapshot_size_in_MB = self.zero_snapshot_size / 1024 / 1024
+            print(f"Zero Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size_in_MB} MB, snapshot_speed: {snapshot_size_in_MB / (end_time - start_time)} MB/s")
+            print(f"[AsyncCkpt] Iteration {iteration} Zero checkpoint done.")
  
     def get_shard_layers(self, ckpt_args_dict):
         if ckpt_args_dict['pipeline_model_parallel_size'] > 1:
@@ -512,7 +533,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     
         return snapshot_size
     
-    def _copy_tensors_to_cpu_buffers_prealloc(self, state_dict, state_dict_buffer, ckpt_args_dict):
+    def _copy_tensors_to_cpu_buffers_prealloc(self, state_dict, state_dict_buffer, ckpt_args_dict, is_zero):
         # TODO: update cpu buffers if key error bug fix
         # if ckpt_args_dict['pipeline_model_parallel_rank'] == 1:
         #     print(data, cpu_buffers)
@@ -551,9 +572,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         else:
                             if shard_id * shard_dim_0_size < current.shape[0]:
                                 shard = current[shard_id * shard_dim_0_size :]
-                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device='cuda')), dim=0)
+                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device=torch.cuda.current_device())), dim=0)
                             else:
-                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
+                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device=torch.cuda.current_device())
                         snapshot_size += shard.element_size() * shard.numel()
                         cpu_buffer[0].copy_(shard, non_blocking=True)
                     else:
@@ -635,15 +656,15 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         else:
                             if shard_id * shard_dim_0_size < current.shape[0]:
                                 shard = current[shard_id * shard_dim_0_size :]
-                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device='cuda')), dim=0)
+                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device=torch.cuda.current_device())), dim=0)
                             else:
-                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
+                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device=torch.cuda.current_device())
                         cpu_buffer[0].copy_(shard, non_blocking=True)
                     else:
                         cpu_buffer[0].copy_(current, non_blocking=True)
                         
                 current_processed_tensor_numel += current.numel()
-                if current_processed_tensor_numel >= bubble_tensor_numel_list[current_bubble_id]:
+                if current_bubble_id != (len(self.bubble_time_list) - 1) and current_processed_tensor_numel >= bubble_tensor_numel_list[current_bubble_id]:
                     break
             elif isinstance(current, dict):
                 if type(key) == str:
@@ -673,15 +694,16 @@ class AsyncCheckpointEngine(CheckpointEngine):
             with torch.cuda.stream(snapshot_stream):
                 if 'pre_alloc' in ckpt_args_dict and ckpt_args_dict['pre_alloc'] == True:
                     if not is_pipeline:
-                        snapshot_size = self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict)
+                        self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict, is_zero)
                         if ckpt_args_dict['enable_save']:
-                            save_process = Process(target=torch.save, args=(self.state_dict_cpu, self.path))
+                            save_process = multiprocessing.Process(target=torch.save, args=(self.state_dict_cpu, self.path))
                             save_process.start()
                     else:
                         self._copy_tensors_to_cpu_buffers_prealloc_with_pipeline(state_dict, state_dict_buffer, ckpt_args_dict, bubble_id, is_zero)
                         if bubble_id == len(self.bubble_time_list) - 1:
                             if ckpt_args_dict['enable_save']:
-                                save_process = Process(target=torch.save, args=(self.state_dict_cpu, self.path))
+                                nprint(f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} save_path {self.path}", "blue")
+                                save_process = multiprocessing.Process(target=torch.save, args=(self.state_dict_cpu, self.path))
                                 save_process.start()
                     # timestamp = datetime.now().strftime('%m%d-%H%M')
                     # info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
@@ -692,19 +714,18 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     # with open(info_path1, "w") as f:
                     #     f.write(str(state_dict))
                 else:
-                    snapshot_size = self.state_dict_cpu = self._prepare_cpu_buffers(state_dict, ckpt_args_dict)
+                    self.state_dict_cpu = self._prepare_cpu_buffers(state_dict, ckpt_args_dict)
                     self._copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, ckpt_args_dict)
                 # Get the size of self.state_dict_cpu
                 
         else:
             if 'pre_alloc' in ckpt_args_dict and ckpt_args_dict['pre_alloc'] == True:
-                snapshot_size = self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict)
+                self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict)
             else:
                 self.state_dict_cpu = self._prepare_cpu_buffers(state_dict, ckpt_args_dict)
-                snapshot_size = self._copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, ckpt_args_dict)
+                self._copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, ckpt_args_dict)
             if ckpt_args_dict['enable_save']:
                 torch.save(self.state_dict_cpu, self.path)
-        return snapshot_size
     
     def _copy_tensors_to_cpu_buffers_prealloc_old(self, data, cpu_buffers, use_copy_, ckpt_args_dict):
         # TODO: update cpu buffers if key error bug fix

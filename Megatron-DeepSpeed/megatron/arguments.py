@@ -1086,6 +1086,7 @@ def _add_checkpointing_args(parser):
     group.add_argument('--get-state-dict-shape', action='store_true', help="Get state dict shape.")
     group.add_argument('--info-zero-stage', type=int, default=0, help="Zero stage information")
     group.add_argument('--save-checkpoint-in-bubble', action='store_true', help="Save checkpoint in bubble.")
+    group.add_argument('--recovery-dir', type=str, default=None, help="Recovery directory.")
     return parser
 
 

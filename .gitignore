@@ -99,4 +99,6 @@ Megatron-DeepSpeed/examples_deepspeed/**/info/
 Megatron-DeepSpeed/examples_deepspeed/**/trace/
 Megatron-DeepSpeed/examples_deepspeed/**/job.*.out
 Megatron-DeepSpeed/examples_deepspeed/**/output/
+Megatron-DeepSpeed/examples_deepspeed/**/recovery
 my_test
+Megatron-DeepSpeed/megatron/fused_kernels/build_bak
