@@ -182,7 +182,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
         assert ckpt_args_dict != {}
         self.path = path
         self.make_snapshot(state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
-        logger.info(f"[AsyncCkpt] Saved {path}.")
         # self.calculate_parity(state_dict, parity_stream, ckpt_args_dict)
         return None
 
@@ -221,7 +220,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             if isinstance(current, torch.Tensor):
                 # calculate the parity of this tensor for the current dp rank
                 shape = current.shape
-                padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1)))
+                padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1))) * (dp_size * (dp_size - 1))
                 padding = [0] * (2 * (current.dim() - 1))
                 padding = padding + [0, padded_shape_dim_0 - shape[0]]
                 padded_current_tensor = torch.nn.functional.pad(current, padding)
@@ -332,13 +331,8 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 torch.save(scatter_dict_list[i], scatter_save_path)
     
     def make_snapshot(self, state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id):
-        if is_zero:
-            logger.info(f"[AsyncCkpt] Iteration {iteration} Zero checkpointing...")
-        else:
-            logger.info(f"[AsyncCkpt] Iteration {iteration} Snapshoting...")
 
         if ckpt_args_dict['checkpoint_new_thread']:
-            logger.info(f"[AsyncCkpt] Using concurrency.")
             snapshot_thread = threading.Thread(
                 target=self._snapshot_thread,
                 args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
@@ -346,7 +340,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
             snapshot_thread.start()
             self.snapshot_thread_list.append(snapshot_thread)
         else:
-            logger.info(f"[AsyncCkpt] Not using concurrency.")
             self._snapshot_thread(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
         # self.make_snapshot_sync(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict)
         # return snapshot_thread

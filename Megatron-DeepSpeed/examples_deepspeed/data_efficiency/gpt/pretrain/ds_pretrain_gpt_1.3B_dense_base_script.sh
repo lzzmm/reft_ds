@@ -144,25 +144,25 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=2
+mp_size=1
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=4
-# no_pp="true"
-no_pp="false"
+pp_size=1
+no_pp="true"
+# no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
 num_node=1
-num_gpus=8
+num_gpus=4
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=1
+dp_size=4
 gradient_accumulation_steps=1
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -339,7 +339,7 @@ username=$(whoami)
 checkpoint_new_thread="true"
 checkpoint_new_stream="true"
 double_checkpoint="false"
-enable_parity="false"
+enable_parity="true"
 enable_pin_memory="true"
 enable_sharding="true"
 save_embeddings="false"
@@ -350,7 +350,7 @@ enable_snapshot="true"
 prealloc="true"
 pure_torch_save="false"
 get_state_dict_shape="false"
-save_checkpoint_in_bubble="true"
+save_checkpoint_in_bubble="false"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -685,6 +685,6 @@ fi
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --include="localhost:0,1,2,3" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --hostfile=hostfile --include="gpu1-25:2,3,4,5@gpu1-22:1,3,4,5" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
