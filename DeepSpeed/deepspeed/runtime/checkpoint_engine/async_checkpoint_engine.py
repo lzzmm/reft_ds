@@ -182,7 +182,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
         assert ckpt_args_dict != {}
         self.path = path
         self.make_snapshot(state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
-        logger.info(f"[AsyncCkpt] Saved {path}.")
         # self.calculate_parity(state_dict, parity_stream, ckpt_args_dict)
         return None
 
@@ -332,13 +331,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 torch.save(scatter_dict_list[i], scatter_save_path)
     
     def make_snapshot(self, state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id):
-        if is_zero:
-            logger.info(f"[AsyncCkpt] Iteration {iteration} Zero checkpointing...")
-        else:
-            logger.info(f"[AsyncCkpt] Iteration {iteration} Snapshoting...")
-
         if ckpt_args_dict['checkpoint_new_thread']:
-            logger.info(f"[AsyncCkpt] Using concurrency.")
             snapshot_thread = threading.Thread(
                 target=self._snapshot_thread,
                 args=(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
@@ -346,7 +339,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
             snapshot_thread.start()
             self.snapshot_thread_list.append(snapshot_thread)
         else:
-            logger.info(f"[AsyncCkpt] Not using concurrency.")
+
             self._snapshot_thread(state_dict, use_copy_, snapshot_stream, torch.cuda.current_device(), ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id)
         # self.make_snapshot_sync(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict)
         # return snapshot_thread

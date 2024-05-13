@@ -31,7 +31,7 @@ model_size=0.125
 num_layers=12
 hidden_size=768
 num_attn_heads=12
-global_batch_size=64
+global_batch_size=32
 lr=6.0e-4
 min_lr=1.0e-6
 init_std=0.02
@@ -144,7 +144,7 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=1
+mp_size=2
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
@@ -157,17 +157,13 @@ no_pp="false"
 zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-# num_gpus=$(($(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)-2))
-# num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-# num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-# num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
 num_node=1
 num_gpus=8
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=2
-gradient_accumulation_steps=4
+dp_size=1
+gradient_accumulation_steps=1
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 ## Reduce it manually if GPU OOM
@@ -176,12 +172,12 @@ echo "batch_size: $batch_size"
 ###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
 ## random-LTD's main switch. "false" means disabled. "true" means enabled.
-ltd_enabled=${3:-'false'}
+ltd_enabled='false'
 ## How much dropping ratio to start with. The value denotes the seqlen after
 ## dropping.
-ltd_start=${4:-2048}
+ltd_start=2048
 ## How many steps for random-LTD to gradually reduce dropping ratio to zero.
-ltd_step=${5:-1}
+ltd_step=1
 
 # ltd_enabled="true"
 # ltd_start=128
@@ -189,34 +185,34 @@ ltd_step=${5:-1}
 ###############################################################################
 ### Curriculum learning (CL) configs
 ## CL's main switch. "false" means disabled. "true" means enabled.
-cl_enabled=${6:-'false'}
+cl_enabled='false'
 ## Number of CL metrics to use.
-cl_num_metric=${7:-1}
+cl_num_metric=1
 
 ## Name of difficulty metric
-cl_1st_metric=${8:-'dummy'}
+cl_1st_metric='dummy'
 ## Path to the data indexes for this difficulty metric. Samples on ith row of
 ## index_to_sample have the difficulty value equals to ith row of
 ## index_to_metric.
-cl_1st_index_to_sample_path=${9:-'dummy'}
-cl_1st_index_to_metric_path=${10:-'dummy'}
+cl_1st_index_to_sample_path='dummy'
+cl_1st_index_to_metric_path='dummy'
 ## During training, whether increase difficulty by value- or percentile-based.
-cl_1st_difficulty_type=${11:-'value'}
+cl_1st_difficulty_type='value'
 ## "single_cluster" means no clustering required and probably CL is achieved by
 ## data postprocessing. "schedule_based" means will cluster data based on the
 ## difficulty schedule (pacing function) below.
-cl_1st_clustering_type=${12:-'single_cluster'}
+cl_1st_clustering_type='single_cluster'
 ## Start difficulty
-cl_1st_min=${13:-2048}
+cl_1st_min=2048
 ## End difficulty
-cl_1st_max=${14:-2048}
+cl_1st_max=2048
 ## Total step to reach end difficulty
-cl_1st_total_step=${15:-1}
+cl_1st_total_step=1
 ## When changing difficulty, always make sure it's a multiple of the
 ## difficulty_step below.
-cl_1st_difficulty_step=${16:-1}
+cl_1st_difficulty_step=1
 ## Root degree of the schedule (pacing function).
-cl_1st_root=${17:-1}
+cl_1st_root=1
 
 cl_2nd_metric=${18:-'dummy'}
 cl_2nd_index_to_sample_path=${19:-'dummy'}
@@ -350,11 +346,11 @@ save_embeddings="false"
 enable_profile="false"
 enable_save="false"
 save_location="nfs"
-enable_snapshot="true"
+enable_snapshot=${1:-"false"}
 prealloc="true"
 pure_torch_save="false"
 get_state_dict_shape="false"
-save_checkpoint_in_bubble="true"
+save_checkpoint_in_bubble=${2:-"false"}
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -691,5 +687,6 @@ HOST_NODE_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n 1)
 # fi
 
 # export CUDA_VISIBLE_DEVICES=2
-torchrun --nnodes=1 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR:$PORT --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+torchrun --nnodes=4 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR:$PORT --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include="localhost:2" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+# deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}

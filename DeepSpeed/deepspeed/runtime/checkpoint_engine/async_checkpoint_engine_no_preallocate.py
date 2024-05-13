@@ -49,7 +49,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.path = path
         self.make_snapshot(state_dict, use_copy_, snapshot_stream, ckpt_args_dict)
         # torch.save(state_dict, path)
-        logger.info(f"[AsyncCkpt] Saved {path}.")
         # self.calculate_parity(state_dict, parity_stream, ckpt_args_dict)
         return None
 

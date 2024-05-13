@@ -172,12 +172,12 @@ echo "batch_size: $batch_size"
 ###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
 ## random-LTD's main switch. "false" means disabled. "true" means enabled.
-ltd_enabled=${3:-'false'}
+ltd_enabled='false'
 ## How much dropping ratio to start with. The value denotes the seqlen after
 ## dropping.
-ltd_start=${4:-2048}
+ltd_start=2048
 ## How many steps for random-LTD to gradually reduce dropping ratio to zero.
-ltd_step=${5:-1}
+ltd_step=1
 
 # ltd_enabled="true"
 # ltd_start=128
@@ -185,34 +185,34 @@ ltd_step=${5:-1}
 ###############################################################################
 ### Curriculum learning (CL) configs
 ## CL's main switch. "false" means disabled. "true" means enabled.
-cl_enabled=${6:-'false'}
+cl_enabled='false'
 ## Number of CL metrics to use.
-cl_num_metric=${7:-1}
+cl_num_metric=1
 
 ## Name of difficulty metric
-cl_1st_metric=${8:-'dummy'}
+cl_1st_metric='dummy'
 ## Path to the data indexes for this difficulty metric. Samples on ith row of
 ## index_to_sample have the difficulty value equals to ith row of
 ## index_to_metric.
-cl_1st_index_to_sample_path=${9:-'dummy'}
-cl_1st_index_to_metric_path=${10:-'dummy'}
+cl_1st_index_to_sample_path='dummy'
+cl_1st_index_to_metric_path='dummy'
 ## During training, whether increase difficulty by value- or percentile-based.
-cl_1st_difficulty_type=${11:-'value'}
+cl_1st_difficulty_type='value'
 ## "single_cluster" means no clustering required and probably CL is achieved by
 ## data postprocessing. "schedule_based" means will cluster data based on the
 ## difficulty schedule (pacing function) below.
-cl_1st_clustering_type=${12:-'single_cluster'}
+cl_1st_clustering_type='single_cluster'
 ## Start difficulty
-cl_1st_min=${13:-2048}
+cl_1st_min=2048
 ## End difficulty
-cl_1st_max=${14:-2048}
+cl_1st_max=2048
 ## Total step to reach end difficulty
-cl_1st_total_step=${15:-1}
+cl_1st_total_step=1
 ## When changing difficulty, always make sure it's a multiple of the
 ## difficulty_step below.
-cl_1st_difficulty_step=${16:-1}
+cl_1st_difficulty_step=1
 ## Root degree of the schedule (pacing function).
-cl_1st_root=${17:-1}
+cl_1st_root=1
 
 cl_2nd_metric=${18:-'dummy'}
 cl_2nd_index_to_sample_path=${19:-'dummy'}
