@@ -2651,7 +2651,7 @@ class DeepSpeedEngine(Module):
             ckpt_name = os.path.join(
                 checkpoints_path,
                 str(tag),
-                "dp_rank_" + str(self.mpu.get_data_parallel_rank()) +"_pp_rank_" + str(self.mpu.get_pipe_parallel_rank()) + "_tp_rank_" + str(self.mpu.get_slice_parallel_rank()) + "_model_states.pt",
+                "dp_rank_" + str(self.ckpt_args_dict["data_parallel_rank"]) +"_pp_rank_" + str(self.ckpt_args_dict["pipeline_model_parallel_rank"]) + "_tp_rank_" + str(self.ckpt_args_dict["tensor_model_parallel_rank"]) + "_model_states.pt",
             )
         return ckpt_name
 
@@ -3420,7 +3420,7 @@ class DeepSpeedEngine(Module):
                                   tag,
                                   client_state=client_state,
                                   exclude_frozen_parameters=exclude_frozen_parameters, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=is_pipeline, bubble_id=bubble_id)
-            if not self.ckpt_args_dict["save_checkpoint_in_bubble"]:
+            if self.ckpt_args_dict["enable_snapshot"] and self.ckpt_args_dict["enable_parity"] and not self.ckpt_args_dict["save_checkpoint_in_bubble"]:
                 self.checkpoint_engine.compute_parity(self.module.state_dict(), ckpt_args_dict, is_optimizer=False, iteration=iteration)
                 if self.zero_optimization_stage() == 0:
                     self.checkpoint_engine.compute_parity(self.optimizer.state_dict(), ckpt_args_dict, is_optimizer=True, iteration=iteration)

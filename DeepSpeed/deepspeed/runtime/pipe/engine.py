@@ -1000,7 +1000,7 @@ class PipelineEngine(DeepSpeedEngine):
             raise NotImplementedError(f'Could not receive type {type(recv_type)}')
         
     def _exec_compute_parity(self):
-        if self.ckpt_args_dict["enable_snapshot"] and self.ckpt_args_dict["save_checkpoint_in_bubble"]:
+        if self.ckpt_args_dict["enable_snapshot"] and self.ckpt_args_dict["enable_parity"] and self.ckpt_args_dict["save_checkpoint_in_bubble"]:
             param_parity_dict = self.module.state_dict()
             self.checkpoint_engine.compute_parity(param_parity_dict, self.ckpt_args_dict, False, self.global_steps)
             if self.zero_optimization_stage() == 0:
