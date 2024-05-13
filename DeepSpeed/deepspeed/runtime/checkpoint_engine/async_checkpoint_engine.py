@@ -17,7 +17,7 @@ from datetime import datetime
 import time
 from torch.profiler import profile, record_function
 import torch.distributed as dist
-from multiprocessing import Process
+import multiprocessing
 import time
 import math
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
@@ -195,25 +195,6 @@ class AsyncCheckpointEngine(CheckpointEngine):
     def commit(self, tag):
         logger.info(f"[AsyncCkpt] Checkpoint {tag} is ready now!")
         return True
-    def calculate_parity(self, state_dict, parity_stream, ckpt_args_dict):
-        logger.info(f"[AsyncCkpt] Calculating parity...")
-        
-        parity_thread = threading.Thread(
-            target=self._calculate_parity_thread,
-            args=(state_dict, parity_stream, ckpt_args_dict)
-        )
-        parity_thread.start()
-        return parity_thread
-    def _calculate_parity_thread(self, state_dict, parity_stream, ckpt_args_dict):
-        start_time = time.time()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self._calculate_parity(state_dict, parity_stream, ckpt_args_dict))
-        finally:
-            loop.close()
-        end_time = time.time()
-        print(f"parity time: {end_time - start_time}\n")
     def compute_parity(self, state_dict, ckpt_args_dict, is_optimizer, iteration) :
         parity_thread = threading.Thread(
             target=self.compute_parity_thread,
@@ -252,9 +233,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     if i != dp_rank:
                         current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
                 parity_buffer = compute_xor(*current_parity_shards)
-                    
+                
                 if parent is not None:
-                    parent[key] = parity_buffer
+                    parent[key] = parity_buffer.cpu()
                 else:
                     root = parity_buffer
             elif isinstance(current, dict):
@@ -282,13 +263,15 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     
         if ckpt_args_dict["enable_save"]:
             tag = f"global_step{iteration}"
+            if not os.path.exists(os.path.join(ckpt_args_dict["recovery_dir"], tag)):
+                os.makedirs(os.path.join(ckpt_args_dict["recovery_dir"], tag))
             if not is_optimizer:
-                param_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
-                param_save_process = Process(target=torch.save, args=(root, param_save_path))
+                param_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
+                param_save_process = multiprocessing.Process(target=torch.save, args=(root, param_save_path))
                 param_save_process.start()
             else:
-                optimizer_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_optimizer_parity.pt")
-                optimizer_save_process = Process(target=torch.save, args=(root, optimizer_save_path))
+                optimizer_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_optimizer_parity.pt")
+                optimizer_save_process = multiprocessing.Process(target=torch.save, args=(root, optimizer_save_path))
                 optimizer_save_process.start()
             
     def construct_scatter_dict(self, ckpt_args_dict):
@@ -589,9 +572,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         else:
                             if shard_id * shard_dim_0_size < current.shape[0]:
                                 shard = current[shard_id * shard_dim_0_size :]
-                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device='cuda')), dim=0)
+                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device=torch.cuda.current_device())), dim=0)
                             else:
-                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
+                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device=torch.cuda.current_device())
                         snapshot_size += shard.element_size() * shard.numel()
                         cpu_buffer[0].copy_(shard, non_blocking=True)
                     else:
@@ -673,15 +656,15 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         else:
                             if shard_id * shard_dim_0_size < current.shape[0]:
                                 shard = current[shard_id * shard_dim_0_size :]
-                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device='cuda')), dim=0)
+                                shard = torch.cat((shard, torch.zeros(shard_dim_0_size - shard.shape[0], *shard.shape[1:], device=torch.cuda.current_device())), dim=0)
                             else:
-                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device='cuda')
+                                shard = torch.zeros(shard_dim_0_size, *current.shape[1:], device=torch.cuda.current_device())
                         cpu_buffer[0].copy_(shard, non_blocking=True)
                     else:
                         cpu_buffer[0].copy_(current, non_blocking=True)
                         
                 current_processed_tensor_numel += current.numel()
-                if current_processed_tensor_numel >= bubble_tensor_numel_list[current_bubble_id]:
+                if current_bubble_id != (len(self.bubble_time_list) - 1) and current_processed_tensor_numel >= bubble_tensor_numel_list[current_bubble_id]:
                     break
             elif isinstance(current, dict):
                 if type(key) == str:
@@ -713,13 +696,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     if not is_pipeline:
                         self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict, is_zero)
                         if ckpt_args_dict['enable_save']:
-                            save_process = Process(target=torch.save, args=(self.state_dict_cpu, self.path))
+                            save_process = multiprocessing.Process(target=torch.save, args=(self.state_dict_cpu, self.path))
                             save_process.start()
                     else:
                         self._copy_tensors_to_cpu_buffers_prealloc_with_pipeline(state_dict, state_dict_buffer, ckpt_args_dict, bubble_id, is_zero)
                         if bubble_id == len(self.bubble_time_list) - 1:
                             if ckpt_args_dict['enable_save']:
-                                save_process = Process(target=torch.save, args=(self.state_dict_cpu, self.path))
+                                nprint(f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} save_path {self.path}", "blue")
+                                save_process = multiprocessing.Process(target=torch.save, args=(self.state_dict_cpu, self.path))
                                 save_process.start()
                     # timestamp = datetime.now().strftime('%m%d-%H%M')
                     # info_dir = "/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"

@@ -1000,17 +1000,18 @@ class PipelineEngine(DeepSpeedEngine):
             raise NotImplementedError(f'Could not receive type {type(recv_type)}')
         
     def _exec_compute_parity(self):
-        param_parity_dict = self.module.state_dict()
-        self.checkpoint_engine.compute_parity(param_parity_dict, self.ckpt_args_dict, False, self.global_steps)
-        if self.zero_optimization_stage() == 0:
-            optimizer_parity_dict = self.optimizer.state_dict()
-            self.checkpoint_engine.compute_parity(optimizer_parity_dict, self.ckpt_args_dict, True, self.global_steps)
+        if self.ckpt_args_dict["enable_snapshot"] and self.ckpt_args_dict["save_checkpoint_in_bubble"]:
+            param_parity_dict = self.module.state_dict()
+            self.checkpoint_engine.compute_parity(param_parity_dict, self.ckpt_args_dict, False, self.global_steps)
+            if self.zero_optimization_stage() == 0:
+                optimizer_parity_dict = self.optimizer.state_dict()
+                self.checkpoint_engine.compute_parity(optimizer_parity_dict, self.ckpt_args_dict, True, self.global_steps)
 
                         
 
         
     def _exec_save_checkpoint(self, bubble_id):
-        if self.ckpt_args_dict["save_checkpoint_in_bubble"]:
+        if self.ckpt_args_dict["enable_snapshot"] and self.ckpt_args_dict["save_checkpoint_in_bubble"]:
             self.save_checkpoint(save_dir=self.ckpt_args_dict["save_dir"], client_state={}, ckpt_args_dict=self.ckpt_args_dict, snapshot_stream=self.snapshot_stream, iteration=self.global_steps, is_pipeline=True, bubble_id=bubble_id)
         # def tensor_copy():
         #     with torch.cuda.stream(self.snapshot_stream):

@@ -74,6 +74,11 @@ def get_state_dict_shape(state_dict, info_name, dp_rank, pp_rank, tp_rank, zero_
                 parent[key] = cpu_buffer
             else:
                 root = cpu_buffer
+        elif isinstance(current, tuple) and isinstance(current[0], torch.Tensor):
+            if parent is not None:
+                parent[key] = (current[0].shape, current[0].device)
+            else:
+                root = cpu_buffer
         elif isinstance(current, dict):
             cpu_data = {}
             if type(key) == str:

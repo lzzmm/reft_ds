@@ -179,9 +179,11 @@ def pretrain(train_valid_test_dataset_provider,
     ckpt_args_dict['pre_alloc'] = args.prealloc
     ckpt_args_dict['save_checkpoint_in_bubble'] = args.save_checkpoint_in_bubble
     ckpt_args_dict['save_dir'] = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
+    ckpt_args_dict['recovery_dir'] = os.path.join(args.recovery_dir, datetime.now().strftime("%m%d-%H%M"))
     if args.save_checkpoint_in_bubble:
         if dist.get_rank() == 0:
             os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
+            os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
         dist.barrier()
     if args.deepspeed:
         args.deepspeed_config_dict = _create_ds_config_dict()
