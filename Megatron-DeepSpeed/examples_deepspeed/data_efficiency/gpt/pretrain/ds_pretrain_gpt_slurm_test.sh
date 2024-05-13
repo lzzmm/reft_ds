@@ -31,7 +31,7 @@ model_size=0.125
 num_layers=12
 hidden_size=768
 num_attn_heads=12
-global_batch_size=32
+global_batch_size=64
 lr=6.0e-4
 min_lr=1.0e-6
 init_std=0.02
@@ -51,7 +51,7 @@ init_std=0.02
 # num_layers=24
 # hidden_size=1536
 # num_attn_heads=16
-# global_batch_size=32
+# global_batch_size=16
 # lr=2.5e-4
 # min_lr=1.0e-6
 # init_std=0.015
@@ -144,16 +144,12 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=2
+mp_size=1
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-<<<<<<< HEAD
 pp_size=4
-=======
-pp_size=1
->>>>>>> parallel_test
 # no_pp="true"
 no_pp="false"
 
@@ -165,18 +161,13 @@ zero_stage=0
 # num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 # num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
-<<<<<<< HEAD
 num_node=1
 num_gpus=8
-=======
-num_node=2
-num_gpus=2
->>>>>>> parallel_test
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=1
-gradient_accumulation_steps=8
+dp_size=2
+gradient_accumulation_steps=4
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 ## Reduce it manually if GPU OOM
@@ -359,11 +350,11 @@ save_embeddings="false"
 enable_profile="false"
 enable_save="false"
 save_location="nfs"
-enable_snapshot="false"
+enable_snapshot="true"
 prealloc="true"
 pure_torch_save="false"
 get_state_dict_shape="false"
-save_checkpoint_in_bubble="false"
+save_checkpoint_in_bubble="true"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -373,8 +364,10 @@ mkdir -p ${log_path}
 # checkpoint_path="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/save"
 if [ "${save_location}" == "tmpfs" ]; then
     checkpoint_path="/dev/shm/reft/save"
+    recovery_path="/dev/shm/reft/recovery"
 else
     checkpoint_path="${dir}/../save"
+    recovery_path="${dir}/../recovery"
 fi
 # checkpoint_path="${dir}/../save"
 ## Microsoft internal constraint: because tensorboard is logged by last rank,
@@ -388,6 +381,9 @@ if [ "${log_path}" != "" ]; then
 fi
 if [ "${checkpoint_path}" != "" ]; then
     mkdir -p ${checkpoint_path}
+fi
+if [ "${recovery_path}" != "" ]; then
+    mkdir -p ${recovery_path}
 fi
 if [ "${tensorboard_path}" != "" ]; then
     mkdir -p ${tensorboard_path}
@@ -535,6 +531,10 @@ if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
     # megatron_options+=" --load ${checkpoint_path}/0413-2106"
     # megatron_options+=" --load-tag global_step2"
+fi
+
+if [[ -n "${recovery_path}" ]]; then
+    megatron_options+=" --recovery-dir ${recovery_path}"
 fi
 
 if [[ -n "${tensorboard_path}" ]]; then
