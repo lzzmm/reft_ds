@@ -58,7 +58,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         original_shape = tensor.shape
         new_dim_0_size = math.ceil(original_shape[0] / (chunk_num * (chunk_num - 1))) * (chunk_num - 1)
         new_shape = (new_dim_0_size, *original_shape[1:])
-        return torch.empty(new_shape, device='cpu')
+        return torch.empty(new_shape, device='cpu', dtype=tensor.dtype)
         
     def __update_cpu_buffer(self, state_dict, ckpt_args_dict, is_zero):
         stack = [(state_dict, None, None, None)]
@@ -71,7 +71,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         #     f.write(str(state_dict))
         while stack:
             current, parent, key, tag = stack.pop(0)
-            if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
+            if isinstance(current, torch.Tensor) and current.device.type == 'cuda' and tag != "rng_state":
                 if ckpt_args_dict['zero_stage'] != 0 and tag == "optimizer": 
                     continue
                 if not is_zero:
@@ -106,6 +106,8 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         tag = "embedding"
                     if "optimizer" == key:
                         tag = "optimizer"
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 for k, v in current.items():
                     stack.append((v, cpu_data, k, tag))
                 if parent is not None:
@@ -116,6 +118,9 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     else:
                         self.zero_state_dict_cpu = cpu_data
             elif isinstance(current, list):
+                if type(key) == str:
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 cpu_data = [None] * len(current)
                 for idx, item in enumerate(current):
                     stack.append((item, cpu_data, idx, tag))
@@ -212,9 +217,15 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.snapshot_thread_list.append(parity_thread)
         
     def compute_parity_thread(self, state_dict, ckpt_args_dict, is_optimizer, iteration):
+        # nprint("Into compute parity", "yellow")
         def compute_xor(*gpu_tensors):
-            assert torch.cuda.is_available(), "CUDA is not available. This function requires a GPU."  
-            int_tensors = [tensor.view(torch.int32) for tensor in gpu_tensors]   
+            assert torch.cuda.is_available(), "CUDA is not available. This function requires a GPU."
+            if gpu_tensors[0].dtype == torch.float32:
+                parity_dtype = torch.int32
+            else:
+                assert gpu_tensors[0].dtype == torch.float16
+                parity_dtype = torch.int16  
+            int_tensors = [tensor.view(parity_dtype) for tensor in gpu_tensors]   
             parity = torch.zeros_like(int_tensors[0])
             for tensor in int_tensors:
                 parity ^= tensor
@@ -223,17 +234,24 @@ class AsyncCheckpointEngine(CheckpointEngine):
         root = None
         dp_size = ckpt_args_dict["data_parallel_size"]
         dp_rank = ckpt_args_dict["data_parallel_rank"]
-        stack = [(state_dict, None, None)]
+        stack = [(state_dict, None, None, None)]
         while stack:
-            current, parent, key = stack.pop(0)
-            if isinstance(current, torch.Tensor):
+            current, parent, key, tag = stack.pop(0)
+            if isinstance(current, torch.Tensor) and tag != "rng_state":
                 # calculate the parity of this tensor for the current dp rank
+                # nprint("Into compute parity tensor", "red")
                 shape = current.shape
+                # if key == "layers.0.self_attention.query_key_value.weight":
+                #     nprint(f"current shape: {shape}, current type: {current.dtype}", "blue")
                 padded_shape_dim_0 = math.ceil(shape[0] / (dp_size * (dp_size - 1))) * (dp_size * (dp_size - 1))
                 padding = [0] * (2 * (current.dim() - 1))
                 padding = padding + [0, padded_shape_dim_0 - shape[0]]
                 padded_current_tensor = torch.nn.functional.pad(current, padding)
+                # if key == "layers.0.self_attention.query_key_value.weight":
+                #     nprint(f"padded_current_tensor shape: {padded_current_tensor.shape}", "blue")
                 tensor_shards = padded_current_tensor.chunk(dp_size * (dp_size - 1), dim=0)
+                # if key == "layers.0.self_attention.query_key_value.weight":
+                #     nprint(f"tensor_shards shape: {tensor_shards[0].shape}", "blue")
                 # Figure out the shards participating the parity computation based on dp rank
                 current_parity_shards = []
                 # i is the dp rank to be taken shards
@@ -241,23 +259,36 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     if i != dp_rank:
                         current_parity_shards.append(tensor_shards[i * (dp_size - 1) + (dp_rank if i > dp_rank else dp_rank - 1)])
                 parity_buffer = compute_xor(*current_parity_shards)
-                
+                # if key == "layers.0.self_attention.query_key_value.weight":
+                #     nprint(f"parity_buffer shape: {parity_buffer.shape}", "blue")
+                #     sys.exit()
+                    
                 if parent is not None:
                     parent[key] = parity_buffer.cpu()
                 else:
                     root = parity_buffer
             elif isinstance(current, dict):
                 parity_buffer = {}
+                if type(key) == str:
+                    if "embedding" in key:
+                        tag = "embedding"
+                    if "optimizer" == key:
+                        tag = "optimizer"
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 for k, v in current.items():
-                    stack.append((v, parity_buffer, k))
+                    stack.append((v, parity_buffer, k, tag))
                 if parent is not None:
                     parent[key] = parity_buffer
                 else:
                     root = parity_buffer
             elif isinstance(current, list):
+                if type(key) == str:
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 parity_buffer = [None] * len(current)
                 for idx, item in enumerate(current):
-                    stack.append((item, parity_buffer, idx))
+                    stack.append((item, parity_buffer, idx, tag))
                 if parent is not None:
                     parent[key] = parity_buffer
                 else:
@@ -558,7 +589,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 else:
                     cpu_buffer = cpu_buffer[key]
             
-            if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
+            if isinstance(current, torch.Tensor) and current.device.type == 'cuda' and tag != "rng_state":
                 if ckpt_args_dict['zero_stage'] != 0 and tag == "optimizer":
                     continue
                 if cpu_buffer[0].device.type == 'cpu':
@@ -588,9 +619,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         tag = "embedding"
                     if "optimizer" == key:
                         tag = "optimizer"
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 for k, v in current.items():
                     stack.append((v, cpu_buffer, k, tag))
             elif isinstance(current, list):
+                if type(key) == str:
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 for idx, item in enumerate(current):
                     stack.append((item, cpu_buffer, idx, tag))
             else:
@@ -635,7 +671,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 else:
                     cpu_buffer = cpu_buffer[key]
             
-            if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
+            if isinstance(current, torch.Tensor) and current.device.type == 'cuda' and tag != "rng_state":
                 if current_bubble_id > jumped_bubble_num:
                     current_jumped_tensor_numel += current.numel()
                     if current_jumped_tensor_numel >= bubble_tensor_numel_list[jumped_bubble_num]:
@@ -674,9 +710,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         tag = "embedding"
                     if "optimizer" == key:
                         tag = "optimizer"
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 for k, v in current.items():
                     stack.append((v, cpu_buffer, k, tag))
             elif isinstance(current, list):
+                if type(key) == str:
+                    if "rng_state" in key:
+                        tag = "rng_state"
                 for idx, item in enumerate(current):
                     stack.append((item, cpu_buffer, idx, tag))
             else:
@@ -698,7 +739,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                     if not is_pipeline:
                         self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict, is_zero)
                         if ckpt_args_dict['enable_save']:
-                            save_process = multiprocessing.Process(target=torch.save, args=(self.state_dict_cpu, self.path))
+                            save_process = multiprocessing.Process(target=torch.save, args=(state_dict_buffer, self.path))
                             save_process.start()
                     else:
                         self._copy_tensors_to_cpu_buffers_prealloc_with_pipeline(state_dict, state_dict_buffer, ckpt_args_dict, bubble_id, is_zero)

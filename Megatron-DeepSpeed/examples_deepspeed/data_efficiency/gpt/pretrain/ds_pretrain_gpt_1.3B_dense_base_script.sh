@@ -119,7 +119,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=20
+train_iters=10
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -353,7 +353,7 @@ get_state_dict_shape="false"
 save_checkpoint_in_bubble="false"
 fail="true"
 failed_ranks="1"
-load_recovery="${dir}/../recovery/0513-2328"
+load_recovery="${dir}/../recovery/0514-2355"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -542,7 +542,7 @@ echo -e ${log_args} > ${log_path}/log_args.txt
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
-    megatron_options+=" --load ${checkpoint_path}/0513-2328"
+    megatron_options+=" --load ${checkpoint_path}/0514-2355"
     megatron_options+=" --load-tag global_step2"
 fi
 

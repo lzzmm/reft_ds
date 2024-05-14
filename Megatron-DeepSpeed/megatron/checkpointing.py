@@ -637,7 +637,11 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
                     rng_state = state_dict['rng_state'][0]
                 random.setstate(rng_state['random_rng_state'])
                 np.random.set_state(rng_state['np_rng_state'])
+                # convert rng_state['torch_rng_state'] to torch.ByteTensor
+                rng_state['torch_rng_state'] = rng_state['torch_rng_state'].cpu()
                 torch.set_rng_state(rng_state['torch_rng_state'])
+                rng_state['cuda_rng_state'] = rng_state['cuda_rng_state'].cpu()
+                rng_state['rng_tracker_states']['model-parallel-rng'] = rng_state['rng_tracker_states']['model-parallel-rng'].cpu()
                 get_accelerator().set_rng_state(rng_state['cuda_rng_state'])
                 # Check for empty states array
                 if not rng_state['rng_tracker_states']:

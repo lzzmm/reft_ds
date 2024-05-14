@@ -26,6 +26,11 @@ import subprocess
 
 from torch import nn
 import torch.nn.functional as F
+import sys
+
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(root_path)
+from output import get_state_dict_shape, nprint
 
 
 def model_provider(pre_process=True, post_process=True):
