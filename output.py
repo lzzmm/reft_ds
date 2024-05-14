@@ -111,8 +111,8 @@ def get_state_dict_shape(state_dict, info_name, dp_rank, pp_rank, tp_rank, zero_
     info_dir = os.path.join("/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info/", info_name)
     # create this directory if it does not exist
     if not os.path.exists(info_dir):
-        os.makedirs(info_dir)
-    info_path = os.path.join(info_dir, f"{timestamp}_dp_{dp_rank}_pp_{pp_rank}_tp_{tp_rank}_zero_{zero_stage}_{info_name}_state_dict_shape.txt")
+        os.makedirs(info_dir, exist_ok=True)
+    info_path = os.path.join(info_dir, f"{timestamp}_dp_{dp_rank}_pp_{pp_rank}_tp_{tp_rank}_zero_{zero_stage}_{info_name}.txt")
   
     with open(info_path, "w") as f:
         f.write(str(root))

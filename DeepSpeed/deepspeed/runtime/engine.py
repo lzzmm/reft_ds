@@ -2767,14 +2767,13 @@ class DeepSpeedEngine(Module):
         for rank in failed_ranks:
             if rank in dp_ranks:
                 failed_rank = rank
-                
+                                
         stack = [(state_dict, None, None, None)]
         while stack:
             current, parent, key, tag = stack.pop(0)
             if isinstance(current, torch.Tensor):
-                gather_list = None
                 current = current.to(torch.cuda.current_device())
-                torch.distributed.gather(current, gather_list=gather_list, dst=failed_rank, group=dp_group)
+                torch.distributed.gather(current, dst=failed_rank, group=dp_group)
             elif isinstance(current, dict):
                 buffer = {}
                 if type(key) == str:
@@ -2804,7 +2803,7 @@ class DeepSpeedEngine(Module):
         dp_size = self.mpu.get_data_parallel_world_size()
         dp_rank = self.mpu.get_data_parallel_rank()
         dp_group_ranks = torch.distributed.get_process_group_ranks(dp_group)
-        global_rank = self.mpu.get_global_rank()
+        global_rank = torch.distributed.get_rank()
         failed_rank_index = 0
         for i in range(dp_size):
             if dp_group_ranks[i] == dp_rank:
@@ -2820,8 +2819,9 @@ class DeepSpeedEngine(Module):
                 assert shard_shape[0] % (dp_size - 1) == 0
                 parity_shape = (shard_shape[0] // (dp_size - 1), *shard_shape[1:])
                 parity_tensor = torch.zeros(parity_shape, device=torch.cuda.current_device(), dtype=torch.int32)
-                parity_list = [torch.zeros(parity_shape, device=torch.cuda.current_device()) for _ in range(dp_size)]
+                parity_list = [torch.zeros(parity_shape, device=torch.cuda.current_device(), dtype=torch.int32) for _ in range(dp_size)]
                 torch.distributed.gather(parity_tensor, gather_list=parity_list, dst=global_rank, group=dp_group)
+                nprint(f"failed node gathered key: {key}, parity_tensor shape: {parity_list[0].shape}", "yellow")
                 # Recover the original tensor
                 original_tensor_shard_list = []
                 for i in range(dp_size):
@@ -2991,7 +2991,7 @@ class DeepSpeedEngine(Module):
         for rank in failed_ranks:
             if rank in dp_ranks:
                 failed_rank = rank
-                
+        
         failed_rank_in_group = torch.distributed.get_group_rank(group=dp_group, global_rank=failed_rank)
         stack = [(state_dict, None, None, None)]
         device = torch.cuda.current_device()
@@ -3010,9 +3010,9 @@ class DeepSpeedEngine(Module):
                 original_tensor = complete_tensor.narrow(0, 0, original_size)
                 
                 if parent is not None:
-                    parent[key] = (original_tensor, current[1])
+                    parent[key] = original_tensor
                 else:
-                    root = (original_tensor, current[1])
+                    root = original_tensor
                     
             elif isinstance(current, dict):
                 buffer = {}
@@ -3056,7 +3056,9 @@ class DeepSpeedEngine(Module):
         # For the failed node, it just pass the checkpoint_template into this
 
         from deepspeed.runtime.state_dict_factory import SDLoaderFactory
-        if not (self.ckpt_args_dict["fail"] and torch.distributed.get_rank() not in self.ckpt_args_dict["fail_rank"]):
+        # Only when fail is not activated or fail is activated but the current rank is not in the failed ranks
+        # Ckpt are loaded
+        if not (self.ckpt_args_dict["fail"] and torch.distributed.get_rank() in self.ckpt_args_dict["failed_ranks"]):
             ckpt_list = self._get_all_ckpt_names(load_dir, tag)
             sd_loader = SDLoaderFactory.get_sd_loader(ckpt_list, checkpoint_engine=self.checkpoint_engine)
             
@@ -3073,45 +3075,55 @@ class DeepSpeedEngine(Module):
             # The condition entering this block is enabling zero 3
             checkpoint['module'] = get_fp32_state_dict_from_zero_checkpoint(load_dir)
             fetch_z3_params = True
-        
+        # If fail is not activated, then all_gather_complete_state_dict will be activated
         if not self.ckpt_args_dict["fail"]:
             checkpoint = self.all_gather_complete_state_dict(checkpoint)   
         else:
+            # If fail is activated
             # Healthy nodes operations
+            load_device = torch.device(f'cuda:{torch.cuda.current_device()}')
             if torch.distributed.get_rank() not in self.ckpt_args_dict["failed_ranks"]:
-                param_parity_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_param_parity.pt")
-                param_parity_dict = torch.load(param_parity_path, map_location=torch.cuda.current_device())
-                get_state_dict_shape(param_parity_dict, "param_parity_dict", self.mpu.get_data_parallel_rank(), self.mpu.get_pipe_parallel_rank(), self.mpu.get_slice_parallel_rank(), self.zero_optimization_stage())
+                param_parity_path = os.path.join(self.ckpt_args_dict["load_recovery"], tag, f"dp_{self.ckpt_args_dict['data_parallel_rank']}_pp_{self.ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{self.ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
+                param_parity_dict = torch.load(param_parity_path, map_location=load_device)
                 if self.zero_optimization_stage() == 0:
-                    optimizer_save_path = os.path.join(self.ckpt_args_dict["recovery_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_optimizer_parity.pt")
-                    optimizer_parity_dict = torch.load(optimizer_save_path, map_location=torch.cuda.current_device())
-                    get_state_dict_shape(optimizer_parity_dict, "optimizer_parity_dict", self.mpu.get_data_parallel_rank(), self.mpu.get_pipe_parallel_rank(), self.mpu.get_slice_parallel_rank(), self.zero_optimization_stage())
-                checkpoint = self.all_gather_healthy_ranks_state_dict(checkpoint)
+                    optimizer_save_path = os.path.join(self.ckpt_args_dict["load_recovery"], tag, f"dp_{self.ckpt_args_dict['data_parallel_rank']}_pp_{self.ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{self.ckpt_args_dict['tensor_model_parallel_rank']}_optimizer_parity.pt")
+                    optimizer_parity_dict = torch.load(optimizer_save_path, map_location=load_device)
+                # checkpoint = self.all_gather_healthy_ranks_state_dict(checkpoint)
+                nprint(f"Healthy rank {torch.distributed.get_rank()} all gather healthy ranks ckpt shard", "green")
+                # 我觉得这里gather没有同步的原因是, healthy node根本没有执行gather操作, 只有failed node执行了gather操作, 可以测试一下
                 self.gather_parity_state_dict_healthy_node(param_parity_dict, self.ckpt_args_dict["failed_ranks"])
-                if self.zero_optimization_stage() == 0:
-                    self.gather_parity_state_dict_healthy_node(optimizer_parity_dict, self.ckpt_args_dict["failed_ranks"])
-
-                checkpoint = self.recover_original_tensor(checkpoint, self.ckpt_args_dict["failed_ranks"])
+                nprint(f"Healthy rank {torch.distributed.get_rank()} send module parity", "green")
+                # if self.zero_optimization_stage() == 0:
+                #     self.gather_parity_state_dict_healthy_node(optimizer_parity_dict, self.ckpt_args_dict["failed_ranks"])
+                #     nprint(f"Healthy rank {torch.distributed.get_rank()} send optimizer parity", "green")
+                # checkpoint = self.recover_original_tensor(checkpoint, self.ckpt_args_dict["failed_ranks"])
+                # nprint(f"Healthy rank {torch.distributed.get_rank()} recover original tensor", "green")
+                
             # Failed nodes operations
             else:
-                checkpoint_template_path = os.path.join(self.ckpt_args_dict["parity_dir"], tag, f"dp_{self.mpu.get_data_parallel_rank()}_pp_{self.mpu.get_pipe_parallel_rank()}_tp_{self.mpu.get_slice_parallel_rank()}_state_dict_template.pt")
-                checkpoint = torch.load(checkpoint_template_path, map_location=lambda storage, loc: storage)
+                checkpoint_template_path = os.path.join(self.ckpt_args_dict["load_recovery"], f"dp_{self.ckpt_args_dict['data_parallel_rank']}_pp_{self.ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{self.ckpt_args_dict['tensor_model_parallel_rank']}_state_dict_template.pt")
+                # load_path will not be used to read or write later, we just need to make sure it is not None
+                load_path = checkpoint_template_path
+                checkpoint = torch.load(checkpoint_template_path, map_location=load_device)
                 
                 # Do all-gather, so that every rank can have the healthy ranks' ckpt shard
                 checkpoint = self.all_gather_healthy_ranks_state_dict(checkpoint)
-                # The failed node do gather to get the parity
+                nprint(f"Failed rank {torch.distributed.get_rank()} all gather healthy ranks ckpt shard", "yellow")
+                # The failed node do gather to get the parity, and recover the original tensor
+                # However, it is still shard_list that restored in the state_dict
                 param_dict = checkpoint["module"]
-                get_state_dict_shape(param_dict, "param_dict", self.mpu.get_data_parallel_rank(), self.mpu.get_pipe_parallel_rank(), self.mpu.get_slice_parallel_rank(), self.zero_optimization_stage())
                 checkpoint["module"] = self.gather_parity_state_dict_failed_node(param_dict)
-                
-                if self.zero_optimization_stage() == 0:
-                    optimizer_dict = checkpoint["optimizer"]
-                    get_state_dict_shape(optimizer_dict, "optimizer_dict", self.mpu.get_data_parallel_rank(), self.mpu.get_pipe_parallel_rank(), self.mpu.get_slice_parallel_rank(), self.zero_optimization_stage())
-                    checkpoint["optimizer"] = self.gather_parity_state_dict_failed_node(optimizer_dict)                
+                nprint(f"Failed rank {torch.distributed.get_rank()} gather module parity", "yellow")
+                # if self.zero_optimization_stage() == 0:
+                #     optimizer_dict = checkpoint["optimizer"]
+                #     checkpoint["optimizer"] = self.gather_parity_state_dict_failed_node(optimizer_dict)    
+                #     nprint(f"Failed rank {torch.distributed.get_rank()} gather optimizer parity", "yellow")            
                 # The failed node use broadcast to send the recovered ckpt shard to all other ranks
                 # All nodes concatenate the shards to a complete ckpt (Concatenate every tensor and remove the paddings)
-                checkpoint = self.recover_original_tensor(checkpoint, self.ckpt_args_dict["failed_ranks"])
-                
+                # checkpoint = self.recover_original_tensor(checkpoint, self.ckpt_args_dict["failed_ranks"])
+                # nprint(f"Failed rank {torch.distributed.get_rank()} recover original tensor", "yellow")
+        
+        sys.exit()
 
         if self.has_moe_layers:
             # print(checkpoint.keys())
@@ -3561,7 +3573,7 @@ class DeepSpeedEngine(Module):
                 self.num_experts
             }
             state.update(client_state)
-            logger.info(f'Saving model checkpoint: {save_path}')
+            # logger.info(f'Saving model checkpoint: {save_path}')
             self.checkpoint_engine.save(state, save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
         self._curr_save_path = None
 
@@ -3640,7 +3652,7 @@ class DeepSpeedEngine(Module):
         state.update(client_state)
 
         # if self.save_non_zero_checkpoint:
-        log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
+        # log_dist(message=f'Saving model checkpoint: {save_path}', ranks=[0, 1])
         if isinstance(self.checkpoint_engine, AsyncCheckpointEngine):
             if is_pipeline: 
                 self.checkpoint_engine.save(state_dict=state, path=save_path, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream, dp_group_cpu=dp_group_cpu, iteration=iteration, is_pipeline=True, bubble_id=bubble_id)

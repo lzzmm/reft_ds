@@ -49,6 +49,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.snapshot_thread_list = []
         self.snapshot_size = 0
         self.zero_snapshot_size = 0
+        self.saved_ckpt_template = False
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
         # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
@@ -141,6 +142,8 @@ class AsyncCheckpointEngine(CheckpointEngine):
             sys.exit()
         else:
             self.__update_cpu_buffer(state_dict, ckpt_args_dict, is_zero)
+            
+            
         logger.info(f"[AsyncCkpt] CPU buffer initialized.")
         
 
@@ -165,9 +168,15 @@ class AsyncCheckpointEngine(CheckpointEngine):
         if is_zero and self.init_zero_state_dict_buffer == True:
             self._init_cpu_buffer(state_dict, ckpt_args_dict, is_zero)
             self.init_zero_state_dict_buffer = False
+            
+        if not self.saved_ckpt_template:
+            ckpt_template_path = os.path.join(ckpt_args_dict["recovery_dir"], f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_state_dict_template.pt")
+            if ckpt_args_dict["enable_save"]:
+                torch.save(self.state_dict_cpu, ckpt_template_path)
+            
+            self.saved_ckpt_template = True
 
         timestamp = datetime.now().strftime('%m%d-%H%M')
-        print(f"{timestamp}_dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} save checkpoint")
         # time stamp with month day hour minute second
         if self.print_flag:
             info_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info'))
@@ -263,7 +272,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         if ckpt_args_dict["enable_save"]:
             tag = f"global_step{iteration}"
             if not os.path.exists(os.path.join(ckpt_args_dict["recovery_dir"], tag)):
-                os.makedirs(os.path.join(ckpt_args_dict["recovery_dir"], tag))
+                os.makedirs(os.path.join(ckpt_args_dict["recovery_dir"], tag), exist_ok=True)
             if not is_optimizer:
                 param_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
                 param_save_process = multiprocessing.Process(target=torch.save, args=(root, param_save_path))

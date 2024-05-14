@@ -119,7 +119,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=3
+train_iters=20
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -344,13 +344,16 @@ enable_pin_memory="true"
 enable_sharding="true"
 save_embeddings="false"
 enable_profile="false"
-enable_save="false"
+enable_save="true"
 save_location="nfs"
 enable_snapshot="true"
 prealloc="true"
 pure_torch_save="false"
 get_state_dict_shape="false"
 save_checkpoint_in_bubble="false"
+fail="true"
+failed_ranks="1"
+load_recovery="${dir}/../recovery/0513-2328"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -509,6 +512,20 @@ if [ "${save_checkpoint_in_bubble}" = "true" ]; then
         --save-checkpoint-in-bubble"
 fi
 
+if [ "${fail}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --fail"
+fi
+
+if [ "${failed_ranks}" != "" ]; then
+    megatron_options="${megatron_options} \
+        --failed-ranks ${failed_ranks}"
+fi
+
+if [ "${load_recovery}" != "" ]; then
+    megatron_options="${megatron_options} \
+        --load-recovery ${load_recovery}"
+fi
 
 log_args="checkpoint_new_thread_${checkpoint_new_thread}\ncheckpoint_new_stream_${checkpoint_new_stream}\ndouble_checkpoint_${double_checkpoint}\nenable_parity_${enable_parity}\nenable_pin_memory_${enable_pin_memory}\nenable_sharding_${enable_sharding}\nsave_embeddings_${save_embeddings}\nenable_profile_${enable_profile}\nenable_save_${enable_save}\nprealloc_${prealloc}\nenable_snapshot_${enable_snapshot}\nnum_node_${num_node}\nnum_gpus_${num_gpus}\nglobal_batch_size_${global_batch_size}\nbatch_size_${batch_size}"
 
@@ -525,8 +542,8 @@ echo -e ${log_args} > ${log_path}/log_args.txt
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
-    # megatron_options+=" --load ${checkpoint_path}/0413-2106"
-    # megatron_options+=" --load-tag global_step2"
+    megatron_options+=" --load ${checkpoint_path}/0513-2328"
+    megatron_options+=" --load-tag global_step2"
 fi
 
 if [[ -n "${recovery_path}" ]]; then

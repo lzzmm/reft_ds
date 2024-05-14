@@ -180,11 +180,13 @@ def pretrain(train_valid_test_dataset_provider,
     ckpt_args_dict['save_checkpoint_in_bubble'] = args.save_checkpoint_in_bubble
     ckpt_args_dict['save_dir'] = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
     ckpt_args_dict['recovery_dir'] = os.path.join(args.recovery_dir, datetime.now().strftime("%m%d-%H%M"))
-    if args.save_checkpoint_in_bubble:
-        if dist.get_rank() == 0:
-            os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
-            os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
-        dist.barrier()
+    ckpt_args_dict['fail'] = args.fail
+    ckpt_args_dict['failed_ranks'] = args.failed_ranks
+    ckpt_args_dict['load_recovery'] = args.load_recovery
+    os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
+    os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
+    
+    
     if args.deepspeed:
         args.deepspeed_config_dict = _create_ds_config_dict()
         if "curriculum_learning" in args.deepspeed_config_dict and \
@@ -721,7 +723,7 @@ def setup_model_and_optimizer(model_provider_func,
             args.iteration = load_checkpoint(model, optimizer, opt_param_scheduler)
             timers('load-checkpoint').stop(barrier=True)
             timers.log(['load-checkpoint'])
-            # sys.exit()
+            sys.exit()
         else:
             args.iteration = 0
     else:
