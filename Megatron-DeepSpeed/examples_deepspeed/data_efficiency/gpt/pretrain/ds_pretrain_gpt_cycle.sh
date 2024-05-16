@@ -119,7 +119,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=20
+train_iters=3000
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
