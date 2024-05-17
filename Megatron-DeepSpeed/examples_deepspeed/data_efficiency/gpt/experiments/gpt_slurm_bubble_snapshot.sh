@@ -1,5 +1,5 @@
 srun --pty --partition=i64m1tga40u --job-name=slurm_test --nodes=1 \
---ntasks-per-node=8 --cpus-per-task=4 --gres=gpu:8 \
+--ntasks-per-node=8 --cpus-per-task=8 --gres=gpu:8 \
 --nodelist=gpu3-11 -- bash -c '
   # Source environment
   source ~/.bashrc
@@ -10,5 +10,4 @@ srun --pty --partition=i64m1tga40u --job-name=slurm_test --nodes=1 \
                      enable_profile="true" enable_save="false" save_location="nfs" enable_snapshot="true" \
                      prealloc="true" pure_torch_save="false" get_state_dict_shape="false" \
                      save_checkpoint_in_bubble="true" fail="false" load="false"
-q
 '
