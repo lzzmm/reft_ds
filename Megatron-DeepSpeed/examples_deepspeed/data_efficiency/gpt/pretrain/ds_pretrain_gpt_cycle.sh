@@ -119,7 +119,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=20
+train_iters=3000
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -346,7 +346,7 @@ save_embeddings="false"
 enable_profile="false"
 enable_save="true"
 save_location="nfs"
-enable_snapshot="false"
+enable_snapshot=${1:-"false"}
 prealloc="true"
 pure_torch_save="false"
 get_state_dict_shape="false"
@@ -698,6 +698,7 @@ fi
 # else
 #     echo "Unknown node: $(hostname)"
 #     exit 1
+# fi
 
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}

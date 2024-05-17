@@ -150,10 +150,23 @@ def pretrain(train_valid_test_dataset_provider,
     print_rank_0('time to initialize megatron (seconds): {:.3f}'.format(
         time.time() - _TRAIN_START_TIME))
     print_datetime('after megatron is initialized')
+    
+    
 
     args = get_args()
     timers = get_timers()
     snapshot_stream = torch.cuda.Stream(torch.cuda.current_device())
+    global_config.data_parallel_rank = mpu.get_data_parallel_rank() 
+    global_config.data_parallel_size = mpu.get_data_parallel_world_size()
+    global_config.pipeline_parallel_rank = mpu.get_pipeline_model_parallel_rank()
+    global_config.pipeline_parallel_size = mpu.get_pipeline_model_parallel_world_size()
+    global_config.tensor_parallel_rank = mpu.get_tensor_model_parallel_rank()
+    global_config.tensor_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    global_config.zero_stage = args.zero_stage
+    global_config.save_dir = args.save
+    
+    global_output.init_logger()
+    
     ckpt_args_dict = {}
     ckpt_args_dict['pipeline_model_parallel_size'] = args.pipeline_model_parallel_size
     ckpt_args_dict['tensor_model_parallel_size'] = args.tensor_model_parallel_size
@@ -178,13 +191,15 @@ def pretrain(train_valid_test_dataset_provider,
     ckpt_args_dict['zero_stage'] = args.zero_stage
     ckpt_args_dict['pre_alloc'] = args.prealloc
     ckpt_args_dict['save_checkpoint_in_bubble'] = args.save_checkpoint_in_bubble
-    ckpt_args_dict['save_dir'] = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
-    ckpt_args_dict['recovery_dir'] = os.path.join(args.recovery_dir, datetime.now().strftime("%m%d-%H%M"))
-    if args.save_checkpoint_in_bubble:
-        if dist.get_rank() == 0:
-            os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
-            os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
-        dist.barrier()
+    ckpt_args_dict['save_dir'] = os.path.join(args.save, global_output.init_time_stamp)
+    ckpt_args_dict['recovery_dir'] = os.path.join(args.recovery_dir, global_output.init_time_stamp)
+    ckpt_args_dict['fail'] = args.fail
+    ckpt_args_dict['failed_ranks'] = args.failed_ranks
+    ckpt_args_dict['load_recovery'] = args.load_recovery
+    os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
+    os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
+    
+    
     if args.deepspeed:
         args.deepspeed_config_dict = _create_ds_config_dict()
         if "curriculum_learning" in args.deepspeed_config_dict and \
@@ -438,24 +453,6 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
 
     if not isinstance(model, list):
         model = [model]
-        
-    # n_model = model[0]
-    # # Get model state dict
-    # model_state_dict = n_model.state_dict()
-    # # Get current node 3D parallel rank
-    # dp_rank = mpu.get_data_parallel_rank()
-    # pp_rank = mpu.get_pipeline_model_parallel_rank()
-    # tp_rank = mpu.get_tensor_model_parallel_rank()
-    
-    # info_dir = "/data2/share/md_test/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/info"
-    # # info_path is the 3D parallel rank
-    # info_path = os.path.join(info_dir, f"info_dp_{dp_rank}_pp_{pp_rank}_tp_{tp_rank}.json")
-    # # write model_state_dict to info_path, don't write the tensor, just the shape
-    # with open(info_path, 'w') as f:
-    #     # write the name and the shape
-    #     for k, v in model_state_dict.items():
-    #         f.write(f"{k}: {v.shape}\n")
-    # exit(0)
 
     # Disallow training and inference with Transformer Engine
     # for non-GPT models
@@ -754,7 +751,8 @@ def train_step(forward_step_func, data_iterator,
     timers = get_timers()
 
     if args.deepspeed and args.ds_pipeline_enabled:
-        print("DeepSpeed pipeline is enabled. Skipping training step.")
+        if torch.distributed.get_rank() == 0:
+            print("DeepSpeed pipeline is enabled. Skipping training step.")
         skipped_iter = 0
         num_zeros_in_grad = 0
         assert isinstance(model[0], deepspeed.PipelineEngine)
@@ -1181,7 +1179,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             'throughput/elapsed_ms_per_iteration': elapsed_time_per_iteration,
             'throughput/iteration': iteration,
         }
-        print("throughput_metrics", throughput_metrics)
+        print(f"dp_{global_config.data_parallel_rank}_pp_{global_config.pipeline_parallel_rank}_tp_{global_config.tensor_parallel_rank} throughput_metrics: {throughput_metrics}")
         if wandb is not None and getattr(wandb, 'run', None) is not None:
             assert wandb.run is not None
             wandb_metrics = {
@@ -1296,26 +1294,12 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     """Train the model function."""
     args = get_args()
     timers = get_timers()
-    if args.data_parallel_size > 1 and args.enable_sharding and args.enable_parity:
-        assert args.num_layers % (args.data_parallel_size * (args.data_parallel_size - 1)) == 0
     args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
     
     # dp_group_ranks = dist.get_process_group_ranks(mpu.get_data_parallel_group())
     # dp_group_cpu = dist.new_group(ranks=dp_group_ranks, backend="gloo")
     # dp_group_cpu = mpu.get_data_parallel_group()
     dp_group_cpu = None
-    
-    
-    global_config.data_parallel_rank = mpu.get_data_parallel_rank() 
-    global_config.data_parallel_size = mpu.get_data_parallel_world_size()
-    global_config.pipeline_parallel_rank = mpu.get_pipeline_model_parallel_rank()
-    global_config.pipeline_parallel_size = mpu.get_pipeline_model_parallel_world_size()
-    global_config.tensor_parallel_rank = mpu.get_tensor_model_parallel_rank()
-    global_config.tensor_parallel_size = mpu.get_tensor_model_parallel_world_size()
-    global_config.zero_stage = args.zero_stage
-    global_config.save_dir = args.save
-    
-    global_output.init_logger()
     
     def trace_handler(p):
         trace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../examples_deepspeed/data_efficiency/gpt/trace'))
@@ -1337,10 +1321,10 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         profiler_context = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], 
             schedule=torch.profiler.schedule(
-                skip_first=5,
+                skip_first=10,
                 wait=0,
-                warmup=2,
-                active=10,
+                warmup=5,
+                active=5,
                 repeat=1),
             profile_memory=True,
             record_shapes=True, 
@@ -1457,7 +1441,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                                             report_memory_flag, skipped_iter,
                                             grad_norm, params_norm, num_zeros_in_grad,
                                             model, optimizer)
-            # print_throughput(total_loss_dict, iteration, model)
             
             # Autoresume
             if args.adlr_autoresume and \
@@ -1477,20 +1460,6 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         
             # print data_parallel_rank, pipeline_model_parallel_rank, tensor_model_parallel_rank, data_parallel_size, pipeline_model_parallel_size, tensor_model_parallel_size, world_size
             # torch.cuda.synchronize()
-            
-            
-            # Temp for test by yuhan 24/03/2024
-            # if enable_prealloc:
-            #     ckpt_args_dict['pre_alloc'] = True
-            #     ckpt_args_dict['init_cpu_buffer'] = True if iteration <= 1 and ckpt_args_dict['pre_alloc'] == True else False
-                
-            #     # Build CPU Buffer for async D2H cudaMemcpy
-            #     if ckpt_args_dict['init_cpu_buffer'] == True: 
-            #         # This call save_checkpoint in checkpointing.py
-            #         # get state_dict for init cpu buffer but won't save
-            #         # cuz ckpt_args_dict['init_cpu_buffer'] = True
-            #         save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_dict=ckpt_args_dict, snapshot_stream=snapshot_stream)
-            #         ckpt_args_dict['init_cpu_buffer'] = False
             
             # Checkpointing
             if not ckpt_args_dict['save_checkpoint_in_bubble']:

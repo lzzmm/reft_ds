@@ -27,21 +27,21 @@ seq_len=2048
 # init_std=0.02
 
 # GPT-3 Small 125M
-# model_size=0.125
-# num_layers=12
-# hidden_size=768
-# num_attn_heads=12
-# global_batch_size=32
-# lr=6.0e-4
-# min_lr=1.0e-6
-# init_std=0.02
+model_size=0.125
+num_layers=6
+hidden_size=768
+num_attn_heads=12
+global_batch_size=1
+lr=6.0e-4
+min_lr=1.0e-6
+init_std=0.02
 
 ## GPT-3 Medium 350M
 # model_size=0.35
 # num_layers=24
 # hidden_size=1024
 # num_attn_heads=16
-# global_batch_size=16
+# global_batch_size=4
 # lr=3.0e-4
 # min_lr=1.0e-6
 # init_std=0.018
@@ -51,27 +51,28 @@ seq_len=2048
 # num_layers=24
 # hidden_size=1536
 # num_attn_heads=16
-# global_batch_size=16
+# global_batch_size=256
 # lr=2.5e-4
 # min_lr=1.0e-6
 # init_std=0.015
 
 ## GPT-3 XL 1.3B
-model_size=1.3
-num_layers=24
-hidden_size=2048
-num_attn_heads=16
-global_batch_size=32
-lr=2.0e-4
-min_lr=1.0e-6
-init_std=0.013
+# model_size=1.3
+# num_layers=24
+# hidden_size=2048
+# num_attn_heads=16
+# global_batch_size=512
+# # lr=2.0e-4
+# lr=$1
+# min_lr=1.0e-6
+# init_std=0.013
 
 ## GPT-3 2.7B
 # model_size=2.7
 # num_layers=32
 # hidden_size=2560
 # num_attn_heads=32
-# global_batch_size=32
+# global_batch_size=512
 # lr=1.6e-4
 # min_lr=1.0e-6
 # init_std=0.011
@@ -81,7 +82,7 @@ init_std=0.013
 # num_layers=32
 # hidden_size=4096
 # num_attn_heads=32
-# global_batch_size=32
+# global_batch_size=1024
 # lr=1.2e-4
 # min_lr=1.0e-6
 # init_std=0.009
@@ -91,7 +92,7 @@ init_std=0.013
 # num_layers=40
 # hidden_size=5120
 # num_attn_heads=40
-# global_batch_size=8
+# global_batch_size=1024
 # lr=1.0e-4
 # min_lr=1.0e-6
 # init_std=0.008
@@ -119,7 +120,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=20
+train_iters=30
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -144,7 +145,7 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=1
+mp_size=4
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
@@ -157,27 +158,46 @@ no_pp="true"
 zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
+# num_gpus=$(($(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)-2))
+# num_gpus=$(ds_ssh nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+# num_gpus_pernode=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+# num_node=$(( ${num_gpus} / ${num_gpus_pernode} ))
 num_node=1
-num_gpus=8
-num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
+num_gpus=4
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=8
-gradient_accumulation_steps=1
+dp_size=1
+
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 ## Reduce it manually if GPU OOM
-batch_size=$(( ${global_batch_size} / ${dp_size} / ${gradient_accumulation_steps} ))
-echo "batch_size: $batch_size"
+batch_size=$(( ${global_batch_size} / ${dp_size} ))
+# echo "batch_size: $batch_size; dp_size: $dp_size"
+###############################################################################
+### MOE configs
+EP_SIZE=128
+
+if [[ $EP_SIZE -gt $num_gpus ]]; then
+    EP_PARALLEL_SIZE=$num_gpus
+else
+    EP_PARALLEL_SIZE=$EP_SIZE
+fi
+MOE_TRAIN_CAP_FACTOR=1.0
+MOE_EVAL_CAP_FACTOR=1.0
+MOE_MIN_CAP=4
+MOE_DROP_TOKEN="true"
+MLC=0.01
+
+# MOE_DROP_TOKEN="false"
 ###############################################################################
 ### Random layerwise token dropping (random-LTD) configs
 ## random-LTD's main switch. "false" means disabled. "true" means enabled.
-ltd_enabled='false'
+ltd_enabled=${3:-'false'}
 ## How much dropping ratio to start with. The value denotes the seqlen after
 ## dropping.
-ltd_start=2048
+ltd_start=${4:-2048}
 ## How many steps for random-LTD to gradually reduce dropping ratio to zero.
-ltd_step=1
+ltd_step=${5:-1}
 
 # ltd_enabled="true"
 # ltd_start=128
@@ -185,34 +205,34 @@ ltd_step=1
 ###############################################################################
 ### Curriculum learning (CL) configs
 ## CL's main switch. "false" means disabled. "true" means enabled.
-cl_enabled='false'
+cl_enabled=${6:-'false'}
 ## Number of CL metrics to use.
-cl_num_metric=1
+cl_num_metric=${7:-1}
 
 ## Name of difficulty metric
-cl_1st_metric='dummy'
+cl_1st_metric=${8:-'dummy'}
 ## Path to the data indexes for this difficulty metric. Samples on ith row of
 ## index_to_sample have the difficulty value equals to ith row of
 ## index_to_metric.
-cl_1st_index_to_sample_path='dummy'
-cl_1st_index_to_metric_path='dummy'
+cl_1st_index_to_sample_path=${9:-'dummy'}
+cl_1st_index_to_metric_path=${10:-'dummy'}
 ## During training, whether increase difficulty by value- or percentile-based.
-cl_1st_difficulty_type='value'
+cl_1st_difficulty_type=${11:-'value'}
 ## "single_cluster" means no clustering required and probably CL is achieved by
 ## data postprocessing. "schedule_based" means will cluster data based on the
 ## difficulty schedule (pacing function) below.
-cl_1st_clustering_type='single_cluster'
+cl_1st_clustering_type=${12:-'single_cluster'}
 ## Start difficulty
-cl_1st_min=2048
+cl_1st_min=${13:-2048}
 ## End difficulty
-cl_1st_max=2048
+cl_1st_max=${14:-2048}
 ## Total step to reach end difficulty
-cl_1st_total_step=1
+cl_1st_total_step=${15:-1}
 ## When changing difficulty, always make sure it's a multiple of the
 ## difficulty_step below.
-cl_1st_difficulty_step=1
+cl_1st_difficulty_step=${16:-1}
 ## Root degree of the schedule (pacing function).
-cl_1st_root=1
+cl_1st_root=${17:-1}
 
 cl_2nd_metric=${18:-'dummy'}
 cl_2nd_index_to_sample_path=${19:-'dummy'}
@@ -255,7 +275,7 @@ cl_2nd_root=${27:-1}
 # cl_2nd_root=1
 ###############################################################################
 ### Misc configs
-log_interval=1
+log_interval=10
 # eval_iters=10
 eval_iters=0
 eval_interval=100
@@ -276,7 +296,7 @@ activation_checkpoint="false"
 log_optimizer_state="true"
 ###############################################################################
 ### Output and data configs
-current_time=$(date "+%Y.%m.%d_%H.%M")
+current_time=$(date "+%Y.%m.%d_%H.%M.%S")
 host="${HOSTNAME}"
 seed=1234
 num_workers=0
@@ -336,39 +356,14 @@ if [ "${cl_enabled}" = "true" ]; then
 fi
 
 username=$(whoami)
-checkpoint_new_thread="true"
-checkpoint_new_stream="true"
-double_checkpoint="false"
-enable_parity="false"
-enable_pin_memory="true"
-enable_sharding="true"
-save_embeddings="false"
-enable_profile="false"
-enable_save="true"
-save_location="nfs"
-enable_snapshot="false"
-prealloc="true"
-pure_torch_save="false"
-get_state_dict_shape="false"
-save_checkpoint_in_bubble="false"
-fail="true"
-failed_ranks="1"
-load_recovery="${dir}/../recovery/0515-0025"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
-log_path="${output_home}/log/${current_time}"
-mkdir -p ${log_path}
+log_path="${output_home}/log/"
 # checkpoint_path="${output_home}/checkpoint/${jobname}"
 # checkpoint_path="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/save"
-if [ "${save_location}" == "tmpfs" ]; then
-    checkpoint_path="/dev/shm/reft/save"
-    recovery_path="/dev/shm/reft/recovery"
-else
-    checkpoint_path="${dir}/../save"
-    recovery_path="${dir}/../recovery"
-fi
-# checkpoint_path="${dir}/../save"
+# checkpoint_path="/dev/shm/reft/save"
+checkpoint_path="${dir}/../save"
 ## Microsoft internal constraint: because tensorboard is logged by last rank,
 ## it's better to put the path in NFS instead of Blob.
 # tensorboard_dir="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/tensorboard"
@@ -381,9 +376,6 @@ fi
 if [ "${checkpoint_path}" != "" ]; then
     mkdir -p ${checkpoint_path}
 fi
-if [ "${recovery_path}" != "" ]; then
-    mkdir -p ${recovery_path}
-fi
 if [ "${tensorboard_path}" != "" ]; then
     mkdir -p ${tensorboard_path}
 fi
@@ -391,8 +383,6 @@ if [ "${cl_enabled}" = "true" ]; then
     data_cluster_path="${output_home}/data_cluster/${jobname}"
     mkdir -p ${data_cluster_path}
 fi
-
-
 
 ###############################################################################
 data_options=" \
@@ -408,6 +398,12 @@ megatron_options=" \
     --adam-beta1 0.9 \
     --adam-beta2 0.95 \
     --tensor-model-parallel-size ${mp_size} \
+    --moe-expert-parallel-size ${EP_PARALLEL_SIZE} \
+    --num-experts ${EP_SIZE} \
+    --moe-loss-coeff ${MLC} \
+    --moe-train-capacity-factor ${MOE_TRAIN_CAP_FACTOR} \
+    --moe-eval-capacity-factor ${MOE_EVAL_CAP_FACTOR} \
+    --moe-min-capacity ${MOE_MIN_CAP} \
     --init-method-std ${init_std} \
     --lr-decay-tokens ${lr_decay_tokens} \
     --lr-warmup-tokens ${lr_warmup_tokens} \
@@ -438,116 +434,12 @@ megatron_options=" \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard" 
-
-if [ "${checkpoint_new_thread}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --checkpoint-new-thread"
-fi
-
-if [ "${checkpoint_new_stream}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --checkpoint-new-stream"
-fi
-
-if [ "${double_checkpoint}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --double-checkpoint"
-fi
-
-if [ "${enable_parity}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --enable-parity"
-fi
-
-if [ "${enable_pin_memory}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --enable-pin-memory"
-fi
-
-if [ "${enable_sharding}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --enable-sharding"
-fi
-
-if [ "${save_embeddings}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --save-embeddings"
-fi
-
-if [ "${enable_profile}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --enable-profile"
-fi
-
-if [ "${enable_save}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --enable-save"
-    megatron_options="${megatron_options} \
-        --save-location ${save_location}"
-fi
-
-if [ "${enable_snapshot}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --enable-snapshot"
-fi
-
-if [ "${prealloc}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --prealloc"
-fi
-
-if [ "${pure_torch_save}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --pure-torch-save"
-fi
-
-if [ "${get_state_dict_shape}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --get-state-dict-shape"
-fi
-
-if [ "${save_checkpoint_in_bubble}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --save-checkpoint-in-bubble"
-fi
-
-if [ "${fail}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --fail"
-fi
-
-if [ "${failed_ranks}" != "" ]; then
-    megatron_options="${megatron_options} \
-        --failed-ranks ${failed_ranks}"
-fi
-
-if [ "${load_recovery}" != "" ]; then
-    megatron_options="${megatron_options} \
-        --load-recovery ${load_recovery}"
-fi
-
-log_args="checkpoint_new_thread_${checkpoint_new_thread}\ncheckpoint_new_stream_${checkpoint_new_stream}\ndouble_checkpoint_${double_checkpoint}\nenable_parity_${enable_parity}\nenable_pin_memory_${enable_pin_memory}\nenable_sharding_${enable_sharding}\nsave_embeddings_${save_embeddings}\nenable_profile_${enable_profile}\nenable_save_${enable_save}\nprealloc_${prealloc}\nenable_snapshot_${enable_snapshot}\nnum_node_${num_node}\nnum_gpus_${num_gpus}\nglobal_batch_size_${global_batch_size}\nbatch_size_${batch_size}"
-
-
-if [ "${enable_save}" = "true" ]; then
-    log_args="${log_args}\nsave_location_${save_location}"
-fi
-
-if [ "${pure_torch_save}" = "true" ]; then
-    log_args="${log_args}\npure_torch_save_${pure_torch_save}"
-fi
-
-echo -e ${log_args} > ${log_path}/log_args.txt
+    --log-validation-ppl-to-tensorboard"
 
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
-    # megatron_options+=" --load ${checkpoint_path}/0515-0025"
-    # megatron_options+=" --load-tag global_step2"
-fi
-
-if [[ -n "${recovery_path}" ]]; then
-    megatron_options+=" --recovery-dir ${recovery_path}"
+    # megatron_options+=" --load ${checkpoint_path}/0327-154112"
+    # megatron_options+=" --load-tag global_step30"
 fi
 
 if [[ -n "${tensorboard_path}" ]]; then
@@ -687,21 +579,5 @@ if [[ $iteration -gt 0 ]]; then
 fi
 # export NCCL_DEBUG=INFO
 # deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
-# deepspeed --hostfile=hostfile --include=10.120.20.161:4,5,6,7@10.120.20.185:0,1,2,3  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# JOB_ID=1010
-# HOST_NODE_ADDR=gpu1-19
-# echo "hostname: $(hostname)"
-# if [[ "$(hostname)" == "gpu1-19" ]]; then
-#     export CUDA_VISIBLE_DEVICES=0
-# elif [[ "$(hostname)" == "gpu1-23" ]]; then
-#     export CUDA_VISIBLE_DEVICES=1
-# else
-#     echo "Unknown node: $(hostname)"
-#     exit 1
-
-# export CUDA_VISIBLE_DEVICES=4,5,6,7
-# torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# deepspeed --hostfile=hostfile --include="gpu1-25:2,3,4,5@gpu1-22:1,3,4,5" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-# deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+# deepspeed --hostfile=hostfile --include=10.120.20.165:4,5,6,7@10.120.20.185:1,2,3,4  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+deepspeed --include localhost:4,5,6,7 ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}

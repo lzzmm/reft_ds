@@ -1,4 +1,5 @@
 #!/bin/bash
+
 dir=`pwd`
 ###############################################################################
 ### Main configs
@@ -16,25 +17,101 @@ seq_len=2048
 ## We changed min_lr to a lower number (1.0e-6), which we found is able to
 ## provide better zero-shot eval results. 
 
-#GPT-3 test
+model_size_config=${1:-0}
+model_size_config=${model_size_config#*=}
+echo "model_size_config: $model_size_config"
+
+if [ $model_size_config -eq 0 ]; then
+# Small 125M
+    model_size=0.125
+    num_layers=12
+    hidden_size=768
+    num_attn_heads=12
+    global_batch_size=16
+    lr=6.0e-4
+    min_lr=1.0e-6
+    init_std=0.02
+elif [ $model_size_config -eq 1 ]; then
+# Medium 350M
+    model_size=0.35
+    num_layers=24
+    hidden_size=1024
+    num_attn_heads=16
+    global_batch_size=32
+    lr=3.0e-4
+    min_lr=1.0e-6
+    init_std=0.018
+elif [ $model_size_config -eq 2 ]; then
+# Large 760M
+    model_size=0.76
+    num_layers=24
+    hidden_size=1536
+    num_attn_heads=16
+    global_batch_size=16
+    lr=2.5e-4
+    min_lr=1.0e-6
+    init_std=0.015
+elif [ $model_size_config -eq 3 ]; then
+# XL 1.3B
+    model_size=1.3
+    num_layers=24
+    hidden_size=2048
+    num_attn_heads=16
+    global_batch_size=32
+    lr=2.0e-4
+    min_lr=1.0e-6
+    init_std=0.013
+elif [ $model_size_config -eq 4 ]; then
+# 2.7B
+    model_size=2.7
+    num_layers=32
+    hidden_size=2560
+    num_attn_heads=32
+    global_batch_size=16
+    lr=1.6e-4
+    min_lr=1.0e-6
+    init_std=0.011
+elif [ $model_size_config -eq 5 ]; then
+# 6.7B
+    model_size=6.7
+    num_layers=32
+    hidden_size=4096
+    num_attn_heads=32
+    global_batch_size=8
+    lr=1.2e-4
+    min_lr=1.0e-6
+    init_std=0.009
+elif [ $model_size_config -eq 6 ]; then
+# 13B
+    model_size=13
+    num_layers=40
+    hidden_size=5120
+    num_attn_heads=40
+    global_batch_size=8
+    lr=1.0e-4
+    min_lr=1.0e-6
+    init_std=0.008
+elif [ $model_size_config -eq 7 ]; then
+# 175B
+    model_size=175
+    num_layers=96
+    hidden_size=12288
+    num_attn_heads=96
+    global_batch_size=8
+    lr=0.6e-4
+    min_lr=1.0e-6
+    init_std=0.005
+fi
+
+# # GPT-3 Small 125M
 # model_size=0.125
 # num_layers=12
 # hidden_size=768
 # num_attn_heads=12
-# global_batch_size=16
+# global_batch_size=32
 # lr=6.0e-4
 # min_lr=1.0e-6
 # init_std=0.02
-
-# GPT-3 Small 125M
-model_size=0.125
-num_layers=12
-hidden_size=768
-num_attn_heads=12
-global_batch_size=32
-lr=6.0e-4
-min_lr=1.0e-6
-init_std=0.02
 
 ## GPT-3 Medium 350M
 # model_size=0.35
@@ -61,7 +138,7 @@ init_std=0.02
 # num_layers=24
 # hidden_size=2048
 # num_attn_heads=16
-# global_batch_size=16
+# global_batch_size=32
 # lr=2.0e-4
 # min_lr=1.0e-6
 # init_std=0.013
@@ -71,7 +148,7 @@ init_std=0.02
 # num_layers=32
 # hidden_size=2560
 # num_attn_heads=32
-# global_batch_size=16
+# global_batch_size=32
 # lr=1.6e-4
 # min_lr=1.0e-6
 # init_std=0.011
@@ -119,7 +196,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=20
+train_iters=30
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -144,12 +221,12 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=8
+mp_size=1
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=4
+pp_size=8
 # no_pp="true"
 no_pp="false"
 
@@ -157,8 +234,8 @@ no_pp="false"
 zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-num_node=4
-num_gpus=32
+num_node=1
+num_gpus=8
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
@@ -214,16 +291,16 @@ cl_1st_difficulty_step=1
 ## Root degree of the schedule (pacing function).
 cl_1st_root=1
 
-cl_2nd_metric=${18:-'dummy'}
-cl_2nd_index_to_sample_path=${19:-'dummy'}
-cl_2nd_index_to_metric_path=${20:-'dummy'}
-cl_2nd_difficulty_type=${21:-'value'}
-cl_2nd_clustering_type=${22:-'single_cluster'}
-cl_2nd_min=${23:-2048}
-cl_2nd_max=${24:-2048}
-cl_2nd_total_step=${25:-1}
-cl_2nd_difficulty_step=${26:-1}
-cl_2nd_root=${27:-1}
+cl_2nd_metric='dummy'
+cl_2nd_index_to_sample_path='dummy'
+cl_2nd_index_to_metric_path='dummy'
+cl_2nd_difficulty_type='value'
+cl_2nd_clustering_type='single_cluster'
+cl_2nd_min=2048
+cl_2nd_max=2048
+cl_2nd_total_step=1
+cl_2nd_difficulty_step=1
+cl_2nd_root=1
 
 # cl_enabled="true"
 # cl_num_metric=2
@@ -255,7 +332,7 @@ cl_2nd_root=${27:-1}
 # cl_2nd_root=1
 ###############################################################################
 ### Misc configs
-log_interval=100
+log_interval=1
 # eval_iters=10
 eval_iters=0
 eval_interval=100
@@ -336,21 +413,55 @@ if [ "${cl_enabled}" = "true" ]; then
 fi
 
 username=$(whoami)
-checkpoint_new_thread="true"
-checkpoint_new_stream="true"
-double_checkpoint="false"
-enable_parity="false"
-enable_pin_memory="true"
-enable_sharding="true"
-save_embeddings="false"
-enable_profile="false"
-enable_save="false"
-save_location="nfs"
-enable_snapshot=${1:-"false"}
-prealloc="true"
-pure_torch_save="false"
-get_state_dict_shape="false"
-save_checkpoint_in_bubble=${2:-"false"}
+checkpoint_new_thread=${2:-"true"}
+checkpoint_new_thread=${checkpoint_new_thread#*=}
+echo "checkpoint_new_thread: $checkpoint_new_thread"
+checkpoint_new_stream=${3:-"true"}
+checkpoint_new_stream=${checkpoint_new_stream#*=}
+echo "checkpoint_new_stream: $checkpoint_new_stream"
+enable_parity=${4:-"true"}
+enable_parity=${enable_parity#*=}
+echo "enable_parity: $enable_parity"
+enable_pin_memory=${5:-"true"}
+enable_pin_memory=${enable_pin_memory#*=}
+echo "enable_pin_memory: $enable_pin_memory"
+enable_sharding=${6:-"true"}
+enable_sharding=${enable_sharding#*=}
+echo "enable_sharding: $enable_sharding"
+enable_profile=${7:-"true"}
+enable_profile=${enable_profile#*=}
+echo "enable_profile: $enable_profile"
+enable_save=${8:-"false"}
+enable_save=${enable_save#*=}
+echo "enable_save: $enable_save"
+save_location=${9:-"nfs"}
+save_location=${save_location#*=}
+echo "save_location: $save_location"
+enable_snapshot=${10:-"true"}
+enable_snapshot=${enable_snapshot#*=}
+echo "enable_snapshot: $enable_snapshot"
+prealloc=${11:-"true"}
+prealloc=${prealloc#*=}
+echo "prealloc: $prealloc"
+pure_torch_save=${12:-"false"}
+pure_torch_save=${pure_torch_save#*=}
+echo "pure_torch_save: $pure_torch_save"
+get_state_dict_shape=${13:-"false"}
+get_state_dict_shape=${get_state_dict_shape#*=}
+echo "get_state_dict_shape: $get_state_dict_shape"
+save_checkpoint_in_bubble=${14:-"true"}
+save_checkpoint_in_bubble=${save_checkpoint_in_bubble#*=}
+echo "save_checkpoint_in_bubble: $save_checkpoint_in_bubble"
+fail=${15:-"false"}
+fail=${fail#*=}
+echo "fail: $fail"
+load=${16:-"false"}
+load=${load#*=}
+echo "load: $load"
+
+failed_ranks=""
+load_recovery=""
+load_path=""
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -447,11 +558,6 @@ if [ "${checkpoint_new_stream}" = "true" ]; then
         --checkpoint-new-stream"
 fi
 
-if [ "${double_checkpoint}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --double-checkpoint"
-fi
-
 if [ "${enable_parity}" = "true" ]; then
     megatron_options="${megatron_options} \
         --enable-parity"
@@ -465,11 +571,6 @@ fi
 if [ "${enable_sharding}" = "true" ]; then
     megatron_options="${megatron_options} \
         --enable-sharding"
-fi
-
-if [ "${save_embeddings}" = "true" ]; then
-    megatron_options="${megatron_options} \
-        --save-embeddings"
 fi
 
 if [ "${enable_profile}" = "true" ]; then
@@ -509,24 +610,21 @@ if [ "${save_checkpoint_in_bubble}" = "true" ]; then
         --save-checkpoint-in-bubble"
 fi
 
-
-log_args="checkpoint_new_thread_${checkpoint_new_thread}\ncheckpoint_new_stream_${checkpoint_new_stream}\ndouble_checkpoint_${double_checkpoint}\nenable_parity_${enable_parity}\nenable_pin_memory_${enable_pin_memory}\nenable_sharding_${enable_sharding}\nsave_embeddings_${save_embeddings}\nenable_profile_${enable_profile}\nenable_save_${enable_save}\nprealloc_${prealloc}\nenable_snapshot_${enable_snapshot}\nnum_node_${num_node}\nnum_gpus_${num_gpus}\nglobal_batch_size_${global_batch_size}\nbatch_size_${batch_size}"
-
-
-if [ "${enable_save}" = "true" ]; then
-    log_args="${log_args}\nsave_location_${save_location}"
-fi
-
-if [ "${pure_torch_save}" = "true" ]; then
-    log_args="${log_args}\npure_torch_save_${pure_torch_save}"
-fi
-
-echo -e ${log_args} > ${log_path}/log_args.txt
-
 if [[ -n "${checkpoint_path}" ]]; then
     megatron_options+=" --save ${checkpoint_path}"
-    # megatron_options+=" --load ${checkpoint_path}/0413-2106"
-    # megatron_options+=" --load-tag global_step2"
+fi
+
+if [ "${load}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --load ${load_path}"
+    megatron_options="${megatron_options} \
+        --load-tag global_step2"
+    if [ "${fail}" = "true" ]; then
+        megatron_options="${megatron_options} \
+        --load-recovery ${load_recovery}"
+        megatron_options="${megatron_options} \
+        --failed-ranks ${failed_ranks}"
+    fi
 fi
 
 if [[ -n "${recovery_path}" ]]; then
@@ -559,6 +657,22 @@ megatron_options="${megatron_options} \
     --train-shuffle-idx-path ${shuffle_idx_path} \
     --data-efficiency-curriculum-learning"
 fi
+
+log_args="model_size_config ${mode_size_config}\nnum_node_${num_node}\nnum_gpus_${num_gpus}\nglobal_batch_size_${global_batch_size}\nbatch_size_${batch_size}\ncheckpoint_new_thread_${checkpoint_new_thread}\ncheckpoint_new_stream_${checkpoint_new_stream}\nenable_parity_${enable_parity}\nenable_pin_memory_${enable_pin_memory}\nenable_sharding_${enable_sharding}\nenable_profile_${enable_profile}\nenable_save_${enable_save}\nprealloc_${prealloc}\nenable_snapshot_${enable_snapshot}\nget_state_dict_shape_${get_state_dict_shape}\n"
+
+
+if [ "${enable_save}" = "true" ]; then
+    log_args="${log_args}\nsave_location_${save_location}"
+fi
+
+if [ "${pure_torch_save}" = "true" ]; then
+    log_args="${log_args}\npure_torch_save_${pure_torch_save}"
+fi
+
+log_args="${log_args}save_checkpoint_in_bubble_${save_checkpoint_in_bubble}\nfail_${fail}\nfailed_ranks_${failed_ranks}\nload_${load}\nload_path_${load_path}\nrecovery_path_${recovery_path}\n"
+
+
+echo -e ${log_args} > ${log_path}/log_args.txt
 
 config_json="ds_config_gbs${global_batch_size}_mbs${batch_size}_log${log_interval}_zero${zero_stage}_seed${seed}"
 if [ "${ltd_enabled}" = "true" ]; then
@@ -668,9 +782,6 @@ if [[ $iteration -gt 0 ]]; then
     ds_ssh "echo $iteration > $iteration_file"
     ds_ssh "echo $iteration_2 > $iteration_file_2"
 fi
-# export NCCL_DEBUG=INFO
-# deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
-# deepspeed --hostfile=hostfile --include=10.120.20.161:4,5,6,7@10.120.20.185:0,1,2,3  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 JOB_ID=1010
 # HOST_NODE_ADDR="hkbugpusrv04"
 PORT=29537
@@ -687,6 +798,4 @@ HOST_NODE_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n 1)
 # fi
 
 # export CUDA_VISIBLE_DEVICES=2
-torchrun --nnodes=4 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR:$PORT --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# deepspeed --include="localhost:2" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+torchrun --nnodes=1 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR:$PORT --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}

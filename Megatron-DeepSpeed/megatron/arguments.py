@@ -1087,9 +1087,12 @@ def _add_checkpointing_args(parser):
     group.add_argument('--info-zero-stage', type=int, default=0, help="Zero stage information")
     group.add_argument('--save-checkpoint-in-bubble', action='store_true', help="Save checkpoint in bubble.")
     group.add_argument('--recovery-dir', type=str, default=None, help="Recovery directory.")
+    group.add_argument('--load-recovery', type=str, default=None, help="Recovery directory when loading.")
+    group.add_argument('--fail', action='store_true', help="Fail.")
+    group.add_argument('--failed-ranks', type=int, nargs='+', default=None, help="Failed ranks.")
+    
     return parser
-
-
+    
 def _add_mixed_precision_args(parser):
     group = parser.add_argument_group(title='mixed precision')
 

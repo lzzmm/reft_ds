@@ -10,7 +10,9 @@ from deepspeed import comm as dist
 import copy
 import threading
 import math
-from multiprocessing import Process
+import multiprocessing
+import psutil
+
 
 from deepspeed.utils import logger
 from deepspeed.utils.timer import ThroughputTimer
@@ -764,7 +766,6 @@ class PipelineEngine(DeepSpeedEngine):
     def _exec_backward_pass(self, buffer_id):
         assert self.optimizer is not None, "must provide optimizer during " \
                                            "init in order to use backward"
-
         self.mem_status('BEFORE BWD', reset_max=True)
 
         # The last stage just runs backward on the loss using DeepSpeed's typical
@@ -1001,7 +1002,7 @@ class PipelineEngine(DeepSpeedEngine):
         
     def _exec_compute_parity(self):
         if self.ckpt_args_dict["enable_snapshot"] and self.ckpt_args_dict["enable_parity"] and self.ckpt_args_dict["save_checkpoint_in_bubble"]:
-            param_parity_dict = self.module.state_dict()
+            param_parity_dict = self.module_state_dict()
             self.checkpoint_engine.compute_parity(param_parity_dict, self.ckpt_args_dict, False, self.global_steps)
             if self.zero_optimization_stage() == 0:
                 optimizer_parity_dict = self.optimizer.state_dict()
@@ -1215,6 +1216,21 @@ class PipelineEngine(DeepSpeedEngine):
             self.timers(PIPE_RECV_GRAD_TIMER).stop()
 
     def _exec_optimizer_step(self, lr_kwargs=None):
+        
+        # Start a new process to do self.cpu_optimizer.step()
+        # Give me the code
+        # cpu_grads = {}
+        # for param in self.module.parameters():
+        #     cpu_grads[param] = param.grad.to('cpu')
+            
+        # # cpu_optimizer_step_process = multiprocessing.Process(target=self.cpu_optimizer.step, args=(self.module.parameters(), cpu_grads))
+        # # global_output.nprint(f"cpu optimizer pid: {cpu_optimizer_step_process.pid}, available_cpu: {available_cpu}", "cyan")
+        # # cpu_optimizer_step_process.start()
+        # cpu_optimizer_step_start_time = time.perf_counter()
+        # self.cpu_optimizer.step(self.module.parameters(), cpu_grads)
+        # cpu_optimizer_step_end_time = time.perf_counter()
+        # global_output.nprint(f"cpu optimizer step time: {cpu_optimizer_step_end_time - cpu_optimizer_step_start_time}", "cyan")
+        
         for snapshot_thread in self.checkpoint_engine.snapshot_thread_list:
             snapshot_thread.join()
         if self.wall_clock_breakdown():
