@@ -23,7 +23,7 @@ from . import module_inject
 
 from .accelerator import get_accelerator
 from .runtime.engine import DeepSpeedEngine, DeepSpeedOptimizerCallable, DeepSpeedSchedulerCallable
-from .runtime.engine import ADAM_OPTIMIZER, LAMB_OPTIMIZER
+from .runtime.engine import ADAM_OPTIMIZER, LAMB_OPTIMIZER, CPUAdamOptimizer
 from .runtime.hybrid_engine import DeepSpeedHybridEngine
 from .runtime.pipe.engine import PipelineEngine
 from .inference.engine import InferenceEngine
@@ -202,6 +202,7 @@ def initialize(args=None,
 
     # Restore zero.Init context if necessary
     zero.partition_parameters.restore_init_context()
+    
 
     return_items = [engine, engine.optimizer, engine.training_dataloader, engine.lr_scheduler]
     return tuple(return_items)

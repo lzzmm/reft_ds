@@ -802,3 +802,4 @@ fi
 deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile --include="gpu1-12:0,1,2,3,4,5,6,7@gpu1-24:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+rm -rf /dev/shm/reft

@@ -29,6 +29,7 @@ import sys
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 sys.path.append(root_path)
 from output import get_state_dict_shape, nprint
+import config as global_config
 
 from deepspeed import comm as dist
 from deepspeed.runtime.utils import see_memory_usage, DummyOptim
@@ -113,6 +114,8 @@ from deepspeed.accelerator import get_accelerator
 from deepspeed.runtime.config import DtypeEnum
 
 import torch.distributed
+import psutil
+import multiprocessing
 
 
 MEMORY_OPT_ALLREDUCE_SIZE = 500000000
@@ -147,6 +150,51 @@ def split_half_float_double_sparse(tensors):
         if bucket:
             buckets.append((dtype, bucket))
     return buckets
+
+
+class CPUAdamOptimizer:
+    def __init__(self, parameters, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.m = {}
+        self.v = {}
+        self.param_fp32 = {}
+        self.t = 0
+        
+        for param in parameters:
+            self.m[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
+            self.v[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
+            self.param_fp32[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
+
+    def step(self, parameters, grads):
+        # def is_cpu_available(cpu_id):
+        #     cpu_utilization = psutil.cpu_percent(interval=0.1, percpu=True)
+        #     return cpu_utilization[cpu_id] < 10
+        # start_time = time.perf_counter()
+        # total_cpus = multiprocessing.cpu_count()
+        # available_cpu = None
+        # for cpu_id in range(total_cpus):
+        #     if is_cpu_available(cpu_id):
+        #         available_cpu = cpu_id
+        #         break
+        # p = psutil.Process()
+        # p.cpu_affinity([available_cpu])
+
+        self.t += 1
+        
+        for param in parameters:
+            grad = grads[param]
+            self.m[param] = self.beta1 * self.m[param] + (1 - self.beta1) * grad
+            self.v[param] = self.beta2 * self.v[param] + (1 - self.beta2) * (grad ** 2)
+            
+            m_hat = self.m[param] / (1 - self.beta1 ** self.t)
+            v_hat = self.v[param] / (1 - self.beta2 ** self.t)
+            
+            self.param_fp32[param] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
+        # end_time = time.perf_counter()
+        # nprint(f"pp_{global_config.pipeline_parallel_rank} CPUAdamOptimizer.step time: {end_time - start_time}", "cyan")
 
 
 class EngineTimers(object):
@@ -378,6 +426,9 @@ class DeepSpeedEngine(Module):
         # Use torch (un)flatten ops
         self.flatten = _flatten_dense_tensors
         self.unflatten = _unflatten_dense_tensors
+        
+        self.cpu_optimizer = CPUAdamOptimizer(self.module.parameters())
+        
 
     def destroy(self):
         if self.optimizer is not None and hasattr(self.optimizer, 'destroy'):
