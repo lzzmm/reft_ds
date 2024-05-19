@@ -77,7 +77,7 @@ elif [ $model_size_config -eq 5 ]; then
     num_layers=32
     hidden_size=4096
     num_attn_heads=32
-    global_batch_size=8
+    global_batch_size=32
     lr=1.2e-4
     min_lr=1.0e-6
     init_std=0.009
@@ -234,12 +234,12 @@ no_pp="false"
 zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-num_node=1
+num_node=4
 num_gpus=8
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=1
+dp_size=4
 gradient_accumulation_steps=8
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -546,7 +546,10 @@ megatron_options=" \
     --tensorboard-queue-size 1 \
     --log-timers-to-tensorboard \
     --log-batch-size-to-tensorboard \
-    --log-validation-ppl-to-tensorboard" 
+    --log-validation-ppl-to-tensorboard \
+    --reset-iteration \
+    --no-save-rng \
+    --no-load-rng" 
 
 if [ "${checkpoint_new_thread}" = "true" ]; then
     megatron_options="${megatron_options} \
@@ -799,7 +802,7 @@ fi
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-# deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+# deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile --include="gpu1-12:0,1,2,3,4,5,6,7@gpu1-24:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-rm -rf /dev/shm/reft
+# rm -rf /dev/shm/reft

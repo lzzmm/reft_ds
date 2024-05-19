@@ -1219,17 +1219,17 @@ class PipelineEngine(DeepSpeedEngine):
         
         # Start a new process to do self.cpu_optimizer.step()
         # Give me the code
-        cpu_grads = {}
-        for param in self.module.parameters():
-            cpu_grads[param] = param.grad.to('cpu')
+        # cpu_grads = {}
+        # for param in self.module.parameters():
+        #     cpu_grads[param] = param.grad.to('cpu')
             
         # cpu_optimizer_step_process = multiprocessing.Process(target=self.cpu_optimizer.step, args=(self.module.parameters(), cpu_grads))
         # global_output.nprint(f"cpu optimizer pid: {cpu_optimizer_step_process.pid}, available_cpu: {available_cpu}", "cyan")
         # cpu_optimizer_step_process.start()
-        cpu_optimizer_step_start_time = time.perf_counter()
-        self.cpu_optimizer.step(self.module.parameters(), cpu_grads)
-        cpu_optimizer_step_end_time = time.perf_counter()
-        global_output.nprint(f"cpu optimizer step time: {cpu_optimizer_step_end_time - cpu_optimizer_step_start_time}", "cyan")
+            # cpu_optimizer_step_start_time = time.perf_counter()
+            # self.cpu_optimizer.step(self.module.parameters(), cpu_grads)
+            # cpu_optimizer_step_end_time = time.perf_counter()
+            # global_output.nprint(f"cpu optimizer step time: {cpu_optimizer_step_end_time - cpu_optimizer_step_start_time}", "cyan")
         
         for snapshot_thread in self.checkpoint_engine.snapshot_thread_list:
             snapshot_thread.join()

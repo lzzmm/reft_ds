@@ -71,7 +71,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         #     f.write(str(state_dict))
         while stack:
             current, parent, key, tag = stack.pop(0)
-            if isinstance(current, torch.Tensor) and current.device.type == 'cuda' and tag != "rng_state":
+            if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
                 if ckpt_args_dict['zero_stage'] != 0 and tag == "optimizer": 
                     continue
                 if not is_zero:
@@ -106,8 +106,8 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         tag = "embedding"
                     if "optimizer" == key:
                         tag = "optimizer"
-                    if "rng_state" in key:
-                        tag = "rng_state"
+                    # if "rng_state" in key:
+                    #     tag = "rng_state"
                 for k, v in current.items():
                     stack.append((v, cpu_data, k, tag))
                 if parent is not None:
@@ -148,7 +148,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         else:
             self.__update_cpu_buffer(state_dict, ckpt_args_dict, is_zero)
             if not is_zero:
-                get_state_dict_shape(state_dict, "prealloc", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
+                # get_state_dict_shape(state_dict, "prealloc bubble", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
                 print(f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot_size: {self.snapshot_size / 1024 / 1024} MB")
             else:
                 print(f"Zero dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot_size: {self.zero_snapshot_size / 1024 / 1024} MB")
@@ -311,69 +311,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 os.makedirs(os.path.join(ckpt_args_dict["recovery_dir"], tag), exist_ok=True)
             if not is_optimizer:
                 param_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
-                param_save_process = multiprocessing.Process(target=torch.save, args=(root, param_save_path))
-                param_save_process.start()
+                # param_save_process = multiprocessing.Process(target=torch.save, args=(root, param_save_path))
+                # param_save_process.start()
+                # torch.save(root, param_save_path)
             else:
                 optimizer_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_optimizer_parity.pt")
-                optimizer_save_process = multiprocessing.Process(target=torch.save, args=(root, optimizer_save_path))
-                optimizer_save_process.start()
-            
-    def construct_scatter_dict(self, ckpt_args_dict):
-        stack = [(self.zero_state_dict_cpu, None, None, None)]
-        split_num = ckpt_args_dict['data_parallel_size'] - 1
-        scatter_dict_list = [None for _ in range(split_num)]
-        while stack:
-            current, parent_list, key, tag = stack.pop(0)
-            if isinstance(current, tuple) and isinstance(current[0], torch.Tensor):
-                # Use torch.tensor_split to split current[0] into ckpt_args_dict['data_parallel_size'] parts
-                # Then parent_list[i][key] = current[0]_split[i]
-                current_tensor = current[0]
-                split_tensors = torch.tensor_split(current_tensor, split_num)                                    
-                # sys.exit()
-                assert(parent_list is not None)
-                for i in range(split_num):
-                    parent_list[i][key] = split_tensors[i]
-            elif isinstance(current, dict):
-                buffer_list = [{} for _ in range(split_num)]
-                if type(key) == str:
-                    if "embedding" in key:
-                        tag = "embedding"
-                    if "optimizer" == key:
-                        tag = "optimizer"
-                for k, v in current.items():
-                    stack.append((v, buffer_list, k, tag))
-                if parent_list is not None:
-                    for i in range(split_num):
-                        parent_list[i][key] = buffer_list[i]
-                else:
-                    for i in range(split_num):
-                        scatter_dict_list[i] = buffer_list[i]
-            elif isinstance(current, list):
-                buffer_list = [[None] * len(current) for _ in range(split_num)]
-                for idx, item in enumerate(current):
-                    stack.append((item, buffer_list, idx, tag))
-                if parent_list is not None:
-                    for i in range(split_num):
-                        parent_list[i][key] = buffer_list[i]
-                else:
-                    for i in range(split_num):
-                        scatter_dict_list[i] = buffer_list[i]
-            else:
-                if parent_list is not None:
-                    for parent in parent_list:
-                        parent[key] = current
-                else:
-                    for i in range(split_num):
-                        scatter_dict_list[i] = current
-                    
-        return scatter_dict_list
-    
-    def save_scatter_dict_list(self, scatter_dict_list, ckpt_args_dict):
-        for i in range(ckpt_args_dict['data_parallel_size']):
-            if i != ckpt_args_dict['data_parallel_rank']:
-                scatter_save_path = os.path.join(self.save_dir, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_scatter_dict_{i}.pt")
-                print(f"scatter_save_path: {scatter_save_path}")
-                torch.save(scatter_dict_list[i], scatter_save_path)
+                # optimizer_save_process = multiprocessing.Process(target=torch.save, args=(root, optimizer_save_path))
+                # optimizer_save_process.start()
+                # torch.save(root, optimizer_save_path)
     
     def make_snapshot(self, state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id):
 
@@ -572,7 +517,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 else:
                     cpu_buffer = cpu_buffer[key]
             
-            if isinstance(current, torch.Tensor) and current.device.type == 'cuda' and tag != "rng_state":
+            if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
                 if ckpt_args_dict['zero_stage'] != 0 and tag == "optimizer":
                     continue
                 if cpu_buffer[0].device.type == 'cpu':
@@ -602,14 +547,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         tag = "embedding"
                     if "optimizer" == key:
                         tag = "optimizer"
-                    if "rng_state" in key:
-                        tag = "rng_state"
+                    # if "rng_state" in key:
+                    #     tag = "rng_state"
                 for k, v in current.items():
                     stack.append((v, cpu_buffer, k, tag))
             elif isinstance(current, list):
-                if type(key) == str:
-                    if "rng_state" in key:
-                        tag = "rng_state"
+                # if type(key) == str:
+                #     if "rng_state" in key:
+                #         tag = "rng_state"
                 for idx, item in enumerate(current):
                     stack.append((item, cpu_buffer, idx, tag))
             else:
@@ -654,7 +599,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 else:
                     cpu_buffer = cpu_buffer[key]
             
-            if isinstance(current, torch.Tensor) and current.device.type == 'cuda' and tag != "rng_state":
+            if isinstance(current, torch.Tensor) and current.device.type == 'cuda':
                 if current_bubble_id > jumped_bubble_num:
                     current_jumped_tensor_numel += current.numel()
                     if current_jumped_tensor_numel >= bubble_tensor_numel_list[jumped_bubble_num]:
@@ -693,14 +638,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                         tag = "embedding"
                     if "optimizer" == key:
                         tag = "optimizer"
-                    if "rng_state" in key:
-                        tag = "rng_state"
+                    # if "rng_state" in key:
+                    #     tag = "rng_state"
                 for k, v in current.items():
                     stack.append((v, cpu_buffer, k, tag))
             elif isinstance(current, list):
-                if type(key) == str:
-                    if "rng_state" in key:
-                        tag = "rng_state"
+                # if type(key) == str:
+                    # if "rng_state" in key:
+                    #     tag = "rng_state"
                 for idx, item in enumerate(current):
                     stack.append((item, cpu_buffer, idx, tag))
             else:
@@ -721,17 +666,19 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 if 'pre_alloc' in ckpt_args_dict and ckpt_args_dict['pre_alloc'] == True:
                     if not is_pipeline:
                         self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict, is_zero)
+                        get_state_dict_shape(state_dict_buffer, "prealloc", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
                         if ckpt_args_dict['enable_save']:
-                            buffer = io.BytesIO()
-                            save_process = multiprocessing.Process(target=torch.save, args=(state_dict_buffer, buffer))
+                            save_process = multiprocessing.Process(target=torch.save, args=(state_dict_buffer, self.path))
                             save_process.start()
+                            # torch.save(state_dict_buffer, self.path)
                     else:
                         self._copy_tensors_to_cpu_buffers_prealloc_with_pipeline(state_dict, state_dict_buffer, ckpt_args_dict, bubble_id, is_zero)
+                        get_state_dict_shape(state_dict_buffer, "prealloc_bubble", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
                         if bubble_id == len(self.bubble_time_list) - 1:
                             if ckpt_args_dict['enable_save']:
-                                buffer = io.BytesIO()
-                                save_process = multiprocessing.Process(target=torch.save, args=(self.state_dict_cpu, buffer))
+                                save_process = multiprocessing.Process(target=torch.save, args=(state_dict_buffer, self.path))
                                 save_process.start()
+                                # torch.save(state_dict_buffer, self.path)
                 else:
                     self.state_dict_cpu = self._prepare_cpu_buffers(state_dict, ckpt_args_dict)
                     self._copy_tensors_to_cpu_buffers(state_dict, self.state_dict_cpu, use_copy_, ckpt_args_dict)

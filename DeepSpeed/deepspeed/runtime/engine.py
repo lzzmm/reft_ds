@@ -166,7 +166,7 @@ class CPUAdamOptimizer:
         for param in parameters:
             self.m[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
             self.v[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
-            self.param_fp32[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
+            # self.param_fp32[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
 
     def step(self, parameters, grads):
         # def is_cpu_available(cpu_id):
@@ -189,10 +189,10 @@ class CPUAdamOptimizer:
             self.m[param] = self.beta1 * self.m[param] + (1 - self.beta1) * grad
             self.v[param] = self.beta2 * self.v[param] + (1 - self.beta2) * (grad ** 2)
             
-            m_hat = self.m[param] / (1 - self.beta1 ** self.t)
-            v_hat = self.v[param] / (1 - self.beta2 ** self.t)
+            # m_hat = self.m[param] / (1 - self.beta1 ** self.t)
+            # v_hat = self.v[param] / (1 - self.beta2 ** self.t)
             
-            self.param_fp32[param] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
+            # self.param_fp32[param] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
         # end_time = time.perf_counter()
         # nprint(f"pp_{global_config.pipeline_parallel_rank} CPUAdamOptimizer.step time: {end_time - start_time}", "cyan")
 

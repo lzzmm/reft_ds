@@ -703,7 +703,6 @@ def setup_model_and_optimizer(model_provider_func,
         if isinstance(model, deepspeed.PipelineEngine):
             # hack to get batch_fn from pretrain_gpt.py
             model.set_batch_fn(model.module._megatron_batch_fn)
-
             assert model.grid.get_pipe_parallel_rank() == mpu.get_pipeline_model_parallel_rank()
             assert model.grid.get_slice_parallel_rank() == mpu.get_tensor_model_parallel_rank()
             assert model.grid.get_data_parallel_rank() == mpu.get_data_parallel_rank()

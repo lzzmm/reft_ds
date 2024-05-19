@@ -67,7 +67,7 @@ def get_state_dict_shape(state_dict, info_name, dp_rank, pp_rank, tp_rank, zero_
     while stack:
         current, parent, key, tag = stack.pop(0)
         if isinstance(current, torch.Tensor):
-            cpu_buffer = (current.shape, current.dtype)
+            cpu_buffer = (current.shape, current.dtype, current.device)
 
             if parent is not None:
                 parent[key] = cpu_buffer
@@ -75,7 +75,7 @@ def get_state_dict_shape(state_dict, info_name, dp_rank, pp_rank, tp_rank, zero_
                 root = cpu_buffer
         elif isinstance(current, tuple) and isinstance(current[0], torch.Tensor):
             if parent is not None:
-                parent[key] = (current[0].shape, current[0].dtype, current[1])
+                parent[key] = (current[0].shape, current[0].dtype, current[0].device, current[1])
             else:
                 root = cpu_buffer
         elif isinstance(current, tuple) and isinstance(current[0], list) and isinstance(current[0][0], torch.Tensor):
