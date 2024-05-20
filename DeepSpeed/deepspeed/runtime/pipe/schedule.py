@@ -406,6 +406,9 @@ class ReduceTiedGrads(PipeInstruction):
     """
     pass
 
+class CPUOptimizerStep(PipeInstruction):
+    pass
+
 
 class BufferOpInstruction(PipeInstruction):
     """A pipeline instruction that operates on pipeline buffer(s).

@@ -11,6 +11,7 @@ import copy
 import threading
 import math
 import multiprocessing
+
 import psutil
 
 
@@ -93,7 +94,7 @@ class PipelineEngine(DeepSpeedEngine):
         self.outputs = None
         # BF16 Optimizer is hardcoded for fp32 gradient accumulation
         self.using_bf16_optimizer = type(self.optimizer) == BF16_Optimizer
-
+        
         # used to disable the pipeline all-reduce when used with 1-bit Adam/1-bit LAMB
         self.pipeline_enable_backward_allreduce = True
 
@@ -270,6 +271,10 @@ class PipelineEngine(DeepSpeedEngine):
             self.timers(BACKWARD_REDUCE_GLOBAL_TIMER).stop()
             self.timers(STEP_MICRO_TIMER).start()
             self.timers(STEP_MICRO_TIMER).stop()
+            
+        if self.ckpt_args_dict["enable_cpu_optimizer"]:
+            # self.cpu_optimizer_stream = torch.cuda.Stream(device=torch.cuda.current_device())
+            self.checkpoint_engine.init_grad_buffer(self.module, self.ckpt_args_dict)
             
     def get_dict_tensors_total_size(self, state_dict):
         total_size = 0
@@ -1009,7 +1014,9 @@ class PipelineEngine(DeepSpeedEngine):
                 self.checkpoint_engine.compute_parity(optimizer_parity_dict, self.ckpt_args_dict, True, self.global_steps)
 
                         
-
+    def _exec_cpu_optimizer_step(self):
+        if self.ckpt_args_dict["enable_cpu_optimizer"]:
+            self.checkpoint_engine.cpu_optimizer_step(self.module, self.ckpt_args_dict)
         
     def _exec_save_checkpoint(self, bubble_id):
         if self.ckpt_args_dict["enable_snapshot"] and self.ckpt_args_dict["save_checkpoint_in_bubble"]:
@@ -1219,18 +1226,18 @@ class PipelineEngine(DeepSpeedEngine):
         
         # Start a new process to do self.cpu_optimizer.step()
         # Give me the code
-        # cpu_grads = {}
-        # for param in self.module.parameters():
-        #     cpu_grads[param] = param.grad.to('cpu')
+        # if self.ckpt_args_dict["enable_cpu_optimizer"]: 
+        #     with torch.cuda.stream(self.cpu_optimizer_stream):
+        #         cpu_grads = {}
+        #         for name, param in self.module.named_parameters():
+        #             cpu_grads[name] = param.grad.to("cpu")
             
-        # cpu_optimizer_step_process = multiprocessing.Process(target=self.cpu_optimizer.step, args=(self.module.parameters(), cpu_grads))
-        # global_output.nprint(f"cpu optimizer pid: {cpu_optimizer_step_process.pid}, available_cpu: {available_cpu}", "cyan")
-        # cpu_optimizer_step_process.start()
-            # cpu_optimizer_step_start_time = time.perf_counter()
-            # self.cpu_optimizer.step(self.module.parameters(), cpu_grads)
-            # cpu_optimizer_step_end_time = time.perf_counter()
-            # global_output.nprint(f"cpu optimizer step time: {cpu_optimizer_step_end_time - cpu_optimizer_step_start_time}", "cyan")
-        
+        #         cpu_optimizer_step_thread = threading.Thread(target=self.cpu_optimizer.step, args=(cpu_grads, self.ckpt_args_dict["data_parallel_rank"], self.ckpt_args_dict["data_parallel_size"]))
+        #         cpu_optimizer_step_thread.start()
+        # # cpu_optimizer_step_process = multiprocessing.Process(target=self.cpu_optimizer.step, args=(cpu_grads, self.ckpt_args_dict["data_parallel_rank"], self.ckpt_args_dict["data_parallel_size"]))
+        # # cpu_optimizer_step_process.start()
+        if self.ckpt_args_dict["enable_cpu_optimizer"]:
+            self.checkpoint_engine.cpu_optimizer_step(self.module, self.ckpt_args_dict)
         for snapshot_thread in self.checkpoint_engine.snapshot_thread_list:
             snapshot_thread.join()
         if self.wall_clock_breakdown():
@@ -1422,7 +1429,8 @@ class PipelineEngine(DeepSpeedEngine):
         schedule.SendGrad: _exec_send_grads,
         schedule.RecvGrad: _exec_recv_grads,
         schedule.ComputeParity: _exec_compute_parity,
-        schedule.SaveCheckpoint: _exec_save_checkpoint
+        schedule.SaveCheckpoint: _exec_save_checkpoint,
+        schedule.CPUOptimizerStep: _exec_cpu_optimizer_step,
     }
 
     def _exec_schedule(self, pipe_schedule):

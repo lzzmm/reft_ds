@@ -1090,6 +1090,7 @@ def _add_checkpointing_args(parser):
     group.add_argument('--load-recovery', type=str, default=None, help="Recovery directory when loading.")
     group.add_argument('--fail', action='store_true', help="Fail.")
     group.add_argument('--failed-ranks', type=int, nargs='+', default=None, help="Failed ranks.")
+    group.add_argument('--enable-cpu-optimizer', action='store_true', help="Enable CPU optimizer.")
     
     return parser
     

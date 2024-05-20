@@ -22,8 +22,58 @@ import time
 import math
 root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
 sys.path.append(root_path)
-from output import get_state_dict_shape, nprint
+from output import get_state_dict_shape, nprint, log_info
+import config as global_config
 
+
+class CPUAdamOptimizer:
+    def __init__(self, model, dp_rank, dp_size, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.m = {}
+        self.v = {}
+        self.param_fp32 = {}
+        self.t = 0
+        self.generated_grad = {}
+        
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                stored_param = torch.tensor_split(param, dp_size, dim=0)[(dp_rank + 1) % dp_size]
+                self.m[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
+                self.v[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
+            # self.generated_grad[name] = torch.randn_like(param, device="cpu", dtype=torch.float32)
+            # self.param_fp32[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
+
+    def step(self, cpu_grads, dp_rank, dp_size):
+        # nprint(f"Into step", "cyan")
+        # def is_cpu_available(cpu_id):
+        #     cpu_utilization = psutil.cpu_percent(interval=0.1, percpu=True)
+        #     return cpu_utilization[cpu_id] < 10
+        start_time = time.perf_counter()
+        # total_cpus = multiprocessing.cpu_count()
+        # available_cpu = None
+        # for cpu_id in range(total_cpus):
+        #     if is_cpu_available(cpu_id):
+        #         available_cpu = cpu_id
+        #         break
+        # p = psutil.Process()
+        # p.cpu_affinity(list(range(16,63)))
+
+        self.t += 1
+        
+        for name, grad in cpu_grads.items():
+            # grad = torch.tensor_split(grad, dp_size)[(dp_rank + 1) % dp_size]
+            self.m[name] = self.beta1 * self.m[name] + (1 - self.beta1) * grad
+            self.v[name] = self.beta2 * self.v[name] + (1 - self.beta2) * (grad ** 2)
+            
+            # m_hat = self.m[param] / (1 - self.beta1 ** self.t)
+            # v_hat = self.v[param] / (1 - self.beta2 ** self.t)
+            
+            # self.param_fp32[param] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
+        end_time = time.perf_counter()
+        # nprint(f"dp_{global_config.data_parallel_rank} pp_{global_config.pipeline_parallel_rank} tp_{global_config.tensor_parallel_rank} CPUAdamOptimizer.step time: {end_time - start_time}", "cyan")
    
 class AsyncCheckpointEngine(CheckpointEngine):
     
@@ -50,6 +100,40 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.snapshot_size = 0
         self.zero_snapshot_size = 0
         self.saved_ckpt_template = False
+        self.bubble_snapshot_time = 0
+        self.grad_buffer = {}
+        self.cpu_optimizer_stream = torch.cuda.Stream(torch.cuda.current_device())
+        
+    def init_grad_buffer(self, model, ckpt_args_dict):
+        dp_rank = ckpt_args_dict["data_parallel_rank"]
+        dp_size = ckpt_args_dict["data_parallel_size"]
+        named_parameters = model.named_parameters()
+        for name, param in named_parameters:
+            if param.requires_grad:
+                record_grad = torch.tensor_split(param, dp_size)[(dp_rank + 1) % dp_size]
+                self.grad_buffer[name] = torch.empty_like(record_grad, device='cpu').pin_memory()
+        self.cpu_optimizer = CPUAdamOptimizer(model, dp_rank, dp_size)
+        
+                    
+    def cpu_optimizer_step(self, model, ckpt_args_dict):
+        with torch.cuda.stream(self.cpu_optimizer_stream):
+            cpu_optimizer_step_thread = threading.Thread(
+                target=self.cpu_optimizer_step_thread,
+                args=(model, ckpt_args_dict)
+            )
+            cpu_optimizer_step_thread.start()
+        
+    def cpu_optimizer_step_thread(self, model, ckpt_args_dict):
+        dp_rank = ckpt_args_dict["data_parallel_rank"]
+        dp_size = ckpt_args_dict["data_parallel_size"]
+        named_parameters = model.named_parameters()
+        for name, param in named_parameters:
+            if param.requires_grad:
+                grad = param.grad
+                record_grad = torch.tensor_split(grad, dp_size)[(dp_rank + 1) % dp_size]
+                self.grad_buffer[name].copy_(record_grad, non_blocking=True)
+                
+        self.cpu_optimizer.step(self.grad_buffer, dp_rank, dp_size)
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
         # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
@@ -143,7 +227,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
 
     def _init_cpu_buffer(self, state_dict, ckpt_args_dict, is_zero):
         if ckpt_args_dict['get_state_dict_shape']:
-            get_state_dict_shape(state_dict, "prealloc", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
+            get_state_dict_shape(state_dict, "get_state_dict_shape", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
             sys.exit(0)
         else:
             self.__update_cpu_buffer(state_dict, ckpt_args_dict, is_zero)
@@ -311,13 +395,13 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 os.makedirs(os.path.join(ckpt_args_dict["recovery_dir"], tag), exist_ok=True)
             if not is_optimizer:
                 param_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_param_parity.pt")
-                # param_save_process = multiprocessing.Process(target=torch.save, args=(root, param_save_path))
-                # param_save_process.start()
+                param_save_process = multiprocessing.Process(target=torch.save, args=(root, param_save_path))
+                param_save_process.start()
                 # torch.save(root, param_save_path)
             else:
                 optimizer_save_path = os.path.join(ckpt_args_dict["recovery_dir"], tag, f"dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']}_optimizer_parity.pt")
-                # optimizer_save_process = multiprocessing.Process(target=torch.save, args=(root, optimizer_save_path))
-                # optimizer_save_process.start()
+                optimizer_save_process = multiprocessing.Process(target=torch.save, args=(root, optimizer_save_path))
+                optimizer_save_process.start()
                 # torch.save(root, optimizer_save_path)
     
     def make_snapshot(self, state_dict, use_copy_, snapshot_stream, ckpt_args_dict, is_zero, dp_group_cpu, iteration, is_pipeline, bubble_id):
@@ -338,21 +422,34 @@ class AsyncCheckpointEngine(CheckpointEngine):
         # if use_timer and step_cnt > 10:
         torch.cuda.set_device(device)
         # time.sleep(0.8)
-        start_time = time.perf_counter()
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+
+        if ckpt_args_dict['enable_snapshot'] and ckpt_args_dict['save_checkpoint_in_bubble'] and bubble_id == 0:
+            self.bubble_snapshot_time = 0
+        
         if ckpt_args_dict['pure_torch_save']:
             torch.save(state_dict, self.path)
             snapshot_size_in_MB = os.path.getsize(self.path) / 1024 / 1024
         else:
             self._make_snapshot(state_dict, use_copy_, snapshot_stream, device, ckpt_args_dict, is_zero, is_pipeline, bubble_id)
-        end_time = time.perf_counter()
-        # if not is_zero:
-        #     snapshot_size_in_MB = self.snapshot_size / 1024 / 1024
-        #     print(f"Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size_in_MB} MB, snapshot_speed: {snapshot_size_in_MB / (end_time - start_time)} MB/s")
-        #     print(f"[AsyncCkpt] Iteration {iteration} Snapshot done.")
-        # else:
-        #     snapshot_size_in_MB = self.zero_snapshot_size / 1024 / 1024
-        #     print(f"Zero Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {end_time - start_time}, snapshot_size: {snapshot_size_in_MB} MB, snapshot_speed: {snapshot_size_in_MB / (end_time - start_time)} MB/s")
-        #     print(f"[AsyncCkpt] Iteration {iteration} Zero checkpoint done.")
+        end_event.record()
+        if ckpt_args_dict['enable_test_snapshot_time']:
+            torch.cuda.synchronize()
+            elapsed_time = start_event.elapsed_time(end_event) / 1000
+            if not is_pipeline:
+                if not is_zero:
+                    snapshot_size_in_MB = self.snapshot_size / 1024 / 1024
+                    nprint(f"Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {elapsed_time}, snapshot_size: {snapshot_size_in_MB} MB, snapshot_speed: {snapshot_size_in_MB / (elapsed_time)} MB/s", "magenta")
+                else:
+                    snapshot_size_in_MB = self.zero_snapshot_size / 1024 / 1024
+                    nprint(f"Zero Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {elapsed_time}, snapshot_size: {snapshot_size_in_MB} MB, snapshot_speed: {snapshot_size_in_MB / (elapsed_time)} MB/s", "magenta")
+            else:
+                self.bubble_snapshot_time += elapsed_time
+                if bubble_id == len(self.bubble_time_list) - 1:
+                    snapshot_size_in_MB = self.snapshot_size / 1024 / 1024
+                    nprint(f"Iteration {iteration} dp_{ckpt_args_dict['data_parallel_rank']}_pp_{ckpt_args_dict['pipeline_model_parallel_rank']}_tp_{ckpt_args_dict['tensor_model_parallel_rank']} snapshot time: {self.bubble_snapshot_time}, snapshot_size: {snapshot_size_in_MB} MB, snapshot_speed: {snapshot_size_in_MB / self.bubble_snapshot_time} MB/s", "magenta")
  
     def get_shard_layers(self, ckpt_args_dict):
         if ckpt_args_dict['pipeline_model_parallel_size'] > 1:
@@ -666,14 +763,14 @@ class AsyncCheckpointEngine(CheckpointEngine):
                 if 'pre_alloc' in ckpt_args_dict and ckpt_args_dict['pre_alloc'] == True:
                     if not is_pipeline:
                         self._copy_tensors_to_cpu_buffers_prealloc(state_dict, state_dict_buffer, ckpt_args_dict, is_zero)
-                        get_state_dict_shape(state_dict_buffer, "prealloc", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
+                        # get_state_dict_shape(state_dict_buffer, "prealloc", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
                         if ckpt_args_dict['enable_save']:
                             save_process = multiprocessing.Process(target=torch.save, args=(state_dict_buffer, self.path))
                             save_process.start()
                             # torch.save(state_dict_buffer, self.path)
                     else:
                         self._copy_tensors_to_cpu_buffers_prealloc_with_pipeline(state_dict, state_dict_buffer, ckpt_args_dict, bubble_id, is_zero)
-                        get_state_dict_shape(state_dict_buffer, "prealloc_bubble", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
+                        # get_state_dict_shape(state_dict_buffer, "prealloc_bubble", ckpt_args_dict["data_parallel_rank"], ckpt_args_dict["pipeline_model_parallel_rank"], ckpt_args_dict["tensor_model_parallel_rank"], ckpt_args_dict["zero_stage"])
                         if bubble_id == len(self.bubble_time_list) - 1:
                             if ckpt_args_dict['enable_save']:
                                 save_process = multiprocessing.Process(target=torch.save, args=(state_dict_buffer, self.path))

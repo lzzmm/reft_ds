@@ -131,7 +131,7 @@ def pretrain(train_valid_test_dataset_provider,
         args_defaults: a dictionary from argument-name to argument-value. It
             to set already parse arguments.
     """
-
+    # os.sched_setaffinity(os.getpid(), list(range(32)))
     # Initalize and get arguments, timers, and Tensorboard writer.
     initialize_megatron(extra_args_provider=extra_args_provider,
                         args_defaults=args_defaults, external_args=external_args)
@@ -196,6 +196,8 @@ def pretrain(train_valid_test_dataset_provider,
     ckpt_args_dict['fail'] = args.fail
     ckpt_args_dict['failed_ranks'] = args.failed_ranks
     ckpt_args_dict['load_recovery'] = args.load_recovery
+    ckpt_args_dict['enable_test_snapshot_time'] = False
+    ckpt_args_dict['enable_cpu_optimizer'] = args.enable_cpu_optimizer
     os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
     os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
     
@@ -714,7 +716,10 @@ def setup_model_and_optimizer(model_provider_func,
         if args.load is not None:
             timers = get_timers()
             timers('load-checkpoint', log_level=0).start(barrier=True)
+            load_start_time = time.perf_counter()
             args.iteration = load_checkpoint(model, optimizer, opt_param_scheduler)
+            load_end_time = time.perf_counter()
+            global_output.nprint(f"dp_{global_config.data_parallel_rank} pp_{global_config.pipeline_parallel_rank} tp_{global_config.tensor_parallel_rank} load time: {load_end_time - load_start_time}", "blue")
             timers('load-checkpoint').stop(barrier=True)
             timers.log(['load-checkpoint'])
             # sys.exit()
@@ -1294,7 +1299,11 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     args = get_args()
     timers = get_timers()
     args.save = os.path.join(args.save, datetime.now().strftime("%m%d-%H%M"))
-    
+    # model = model[0]
+    # # iterate model.named_parameters() to get all the parameters
+    # for name, param in model.named_parameters():
+    #     global_output.log_info(f"model parameter name: {name}, param shape: {param.shape}")
+    # sys.exit(0)
     # dp_group_ranks = dist.get_process_group_ranks(mpu.get_data_parallel_group())
     # dp_group_cpu = dist.new_group(ranks=dp_group_ranks, backend="gloo")
     # dp_group_cpu = mpu.get_data_parallel_group()

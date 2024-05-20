@@ -57,7 +57,7 @@ elif [ $model_size_config -eq 3 ]; then
     num_layers=24
     hidden_size=2048
     num_attn_heads=16
-    global_batch_size=32
+    global_batch_size=8
     lr=2.0e-4
     min_lr=1.0e-6
     init_std=0.013
@@ -77,7 +77,7 @@ elif [ $model_size_config -eq 5 ]; then
     num_layers=32
     hidden_size=4096
     num_attn_heads=32
-    global_batch_size=32
+    global_batch_size=8
     lr=1.2e-4
     min_lr=1.0e-6
     init_std=0.009
@@ -196,7 +196,7 @@ train_tokens=$((${train_tokens_in_billion} * 1000000000))
 ## so we just set this config large enough to make sure we have enough
 ## processed data and don't terminate by train_samples.
 # train_samples=$(( 300 * 1000000000 * 2 / ${seq_len} ))
-train_iters=30
+train_iters=10
 
 ## Another wall-clock time termination condition in minutes. Set it large
 ## enough to avoid undesired early termination.
@@ -226,21 +226,21 @@ mp_size=1
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=8
-# no_pp="true"
-no_pp="false"
+pp_size=1
+no_pp="true"
+# no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
 zero_stage=0
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-num_node=4
+num_node=1
 num_gpus=8
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=4
-gradient_accumulation_steps=8
+dp_size=8
+gradient_accumulation_steps=1
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
 ## Reduce it manually if GPU OOM
@@ -458,10 +458,13 @@ echo "fail: $fail"
 load=${16:-"false"}
 load=${load#*=}
 echo "load: $load"
+enable_cpu_optimizer=${17:-"false"}
+enable_cpu_optimizer=${enable_cpu_optimizer#*=}
+echo "enable_cpu_optimizer: $enable_cpu_optimizer"
 
-failed_ranks=""
-load_recovery=""
-load_path=""
+failed_ranks="1"
+load_recovery="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/recovery/0520-2038"
+load_path="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/save/0520-2038"
 # output_home="/blob/users/${username}/project/data_efficient_gpt"
 # output_home="/hpc2hdd/home/zli755/xueze/reft_ds/Megatron-DeepSpeed/examples_deepspeed/data_efficiency/gpt/output"
 output_home="${dir}/../output"
@@ -626,12 +629,19 @@ if [ "${load}" = "true" ]; then
         megatron_options="${megatron_options} \
         --load-recovery ${load_recovery}"
         megatron_options="${megatron_options} \
-        --failed-ranks ${failed_ranks}"
+        --failed-ranks ${failed_ranks}" \
+        megatron_options="${megatron_options} \
+        --fail"
     fi
 fi
 
 if [[ -n "${recovery_path}" ]]; then
     megatron_options+=" --recovery-dir ${recovery_path}"
+fi
+
+if [ "${enable_cpu_optimizer}" = "true" ]; then
+    megatron_options="${megatron_options} \
+        --enable-cpu-optimizer"
 fi
 
 if [[ -n "${tensorboard_path}" ]]; then
@@ -672,7 +682,7 @@ if [ "${pure_torch_save}" = "true" ]; then
     log_args="${log_args}\npure_torch_save_${pure_torch_save}"
 fi
 
-log_args="${log_args}save_checkpoint_in_bubble_${save_checkpoint_in_bubble}\nfail_${fail}\nfailed_ranks_${failed_ranks}\nload_${load}\nload_path_${load_path}\nrecovery_path_${recovery_path}\n"
+log_args="${log_args}save_checkpoint_in_bubble_${save_checkpoint_in_bubble}\nfail_${fail}\nfailed_ranks_${failed_ranks}\nload_${load}\nload_path_${load_path}\nrecovery_path_${recovery_path}\nenable_cpu_optimizer_${enable_cpu_optimizer}\n"
 
 
 echo -e ${log_args} > ${log_path}/log_args.txt
@@ -802,7 +812,7 @@ fi
 # export CUDA_VISIBLE_DEVICES=4,5,6,7
 # torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
 # deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-# deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --hostfile=hostfile ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
+# deepspeed --hostfile=hostfile --include="gpu1-12:0,1,2,3,4,5,6,7@gpu1-28:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # deepspeed --hostfile=hostfile --include="gpu1-12:0,1,2,3,4,5,6,7@gpu1-24:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
 # rm -rf /dev/shm/reft
