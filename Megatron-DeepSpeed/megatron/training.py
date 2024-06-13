@@ -198,6 +198,11 @@ def pretrain(train_valid_test_dataset_provider,
     ckpt_args_dict['load_recovery'] = args.load_recovery
     ckpt_args_dict['enable_test_snapshot_time'] = False
     ckpt_args_dict['enable_cpu_optimizer'] = args.enable_cpu_optimizer
+    ckpt_args_dict['double_snapshot'] = args.double_snapshot
+    ckpt_args_dict['original_load'] = args.original_load
+    ckpt_args_dict['enable_non_blocking'] = args.enable_non_blocking
+    
+    
     os.makedirs(ckpt_args_dict['save_dir'], exist_ok=True)
     os.makedirs(ckpt_args_dict['recovery_dir'], exist_ok=True)
     

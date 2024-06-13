@@ -248,7 +248,7 @@ class TrainSchedule(PipeSchedule):
                     cmds.append(SaveCheckpoint(bubble_id=0))
                 if step_id == (2 * self.num_stages - self.stage_id - 2):
                     cmds.append(SaveCheckpoint(bubble_id=1))
-                if (step_id - (self.stage_id + 2 * self.micro_batches - 1)) >= 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) % 2 == 0:
+                if (step_id - (self.stage_id + 2 * self.micro_batches - 1)) >= 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) % 2 == 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) // 2 < (self.num_stages - self.stage_id):
                     cmds.append(SaveCheckpoint(bubble_id=((step_id - (self.stage_id + 2 * self.micro_batches - 1)) // 2 + 2)))
                     
             if self.stage_id == (self.num_stages - 1):
@@ -263,7 +263,7 @@ class TrainSchedule(PipeSchedule):
                     cmds.append(ComputeParity())
                     cmds.append(SaveCheckpoint(bubble_id=0))
                     
-                if (step_id - (self.stage_id + 2 * self.micro_batches - 1)) >= 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) % 2 == 0:
+                if (step_id - (self.stage_id + 2 * self.micro_batches - 1)) >= 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) % 2 == 0 and (step_id - (self.stage_id + 2 * self.micro_batches - 1)) // 2 < (self.num_stages - self.stage_id - 1):
                     cmds.append(SaveCheckpoint(bubble_id=((step_id - (self.stage_id + 2 * self.micro_batches - 1)) // 2 + 1)))
                     
                 

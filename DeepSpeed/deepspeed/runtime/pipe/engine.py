@@ -128,7 +128,7 @@ class PipelineEngine(DeepSpeedEngine):
         self.next_stage = self.stage_id + 1
         
         # Modification
-        fwd_bwd_bubble_ratio = 1
+        fwd_bwd_bubble_ratio = 0.8
         self.checkpoint_engine.total_bubble_time = (self.stage_id * fwd_bwd_bubble_ratio) + (self.num_stages - self.stage_id - 1) + (self.num_stages - 1)
         self.checkpoint_engine.bubble_time_list = []
         if self.stage_id != 0:
