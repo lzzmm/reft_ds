@@ -1090,6 +1090,10 @@ def _add_checkpointing_args(parser):
     group.add_argument('--load-recovery', type=str, default=None, help="Recovery directory when loading.")
     group.add_argument('--fail', action='store_true', help="Fail.")
     group.add_argument('--failed-ranks', type=int, nargs='+', default=None, help="Failed ranks.")
+    group.add_argument('--enable-cpu-optimizer', action='store_true', help="Enable CPU optimizer.")
+    group.add_argument('--double-snapshot', action='store_true', help="Double snapshot.")
+    group.add_argument('--original-load', action='store_true', help="Original load.")
+    group.add_argument('--enable-non-blocking', action='store_true', help="Enable non-blocking.")
     
     return parser
     

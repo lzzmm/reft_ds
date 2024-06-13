@@ -239,6 +239,7 @@ class PipeDataParallelTopology(ProcessTopology):
 
     def __init__(self, num_pp, num_dp):
         super().__init__(axes=['pipe', 'data'], dims=[num_pp, num_dp])
+        # super().__init__(axes=['data', 'pipe'], dims=[num_dp, num_pp])
 
 
 class PipeModelDataParallelTopology(ProcessTopology):
@@ -246,6 +247,7 @@ class PipeModelDataParallelTopology(ProcessTopology):
 
     def __init__(self, num_pp, num_mp, num_dp):
         super().__init__(axes=['pipe', 'data', 'model'], dims=[num_pp, num_dp, num_mp])
+        # super().__init__(axes=['data', 'pipe', 'model'], dims=[num_dp, num_pp, num_mp])
 
 
 class PipelineParallelGrid:

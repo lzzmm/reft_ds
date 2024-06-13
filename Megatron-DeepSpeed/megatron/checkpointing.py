@@ -253,7 +253,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, ckpt_args_
        or mpu.get_data_parallel_rank() == 0 or args.deepspeed:
         # Arguments, iteration, and model.
         state_dict = {}
-        state_dict['args'] = args
+        # state_dict['args'] = args
         state_dict['checkpoint_version'] = 3.0
         state_dict['iteration'] = iteration
         state_dict['tokens'] = args.consumed_train_tokens
