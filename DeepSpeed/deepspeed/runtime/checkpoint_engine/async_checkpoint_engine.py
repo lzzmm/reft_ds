@@ -46,7 +46,7 @@ class CPUAdamOptimizer:
                 self.v[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
                 self.total_tensors_size += (stored_param.numel() * stored_param.element_size() * 2)
             # self.generated_grad[name] = torch.randn_like(param, device="cpu", dtype=torch.float32)
-            # self.param_fp32[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
+                self.param_fp32[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
 
     def step(self, cpu_grads, dp_rank, dp_size):
         # nprint(f"Into step", "cyan")
@@ -69,10 +69,10 @@ class CPUAdamOptimizer:
             self.m[name] = self.beta1 * self.m[name] + (1 - self.beta1) * grad
             self.v[name] = self.beta2 * self.v[name] + (1 - self.beta2) * (grad ** 2)
             
-            # m_hat = self.m[param] / (1 - self.beta1 ** self.t)
-            # v_hat = self.v[param] / (1 - self.beta2 ** self.t)
+            m_hat = self.m[name] / (1 - self.beta1 ** self.t)
+            v_hat = self.v[name] / (1 - self.beta2 ** self.t)
             
-            # self.param_fp32[param] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
+            self.param_fp32[name] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
         # nprint(f"dp_{global_config.data_parallel_rank} pp_{global_config.pipeline_parallel_rank} tp_{global_config.tensor_parallel_rank} CPUAdamOptimizer.step time: {end_time - start_time}", "cyan")
    
 class AsyncCheckpointEngine(CheckpointEngine):
