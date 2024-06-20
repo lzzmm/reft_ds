@@ -1,5 +1,7 @@
 #!/bin/bash
 
+dir=$(dirname "$0")
+cd $dir
 dir=`pwd`
 ###############################################################################
 ### Main configs
@@ -247,7 +249,7 @@ mp_size=8
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
 ## compatible with pipeline parallelism.
-pp_size=2
+pp_size=4
 # no_pp="true"
 no_pp="false"
 
@@ -255,12 +257,12 @@ no_pp="false"
 zero_stage=1
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-num_node=8
-num_gpus=64
+num_node=64
+num_gpus=512
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=4
+dp_size=16
 gradient_accumulation_steps=8
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -812,21 +814,21 @@ fi
 ## When saving checkpoint to a storage with cache, their could be consistency
 ## issue of the pointer to latest checkpoint. Here we find the correct pointer
 ## and broadcast it to all nodes.
-iteration_file="$checkpoint_path/latest_checkpointed_iteration.txt"
-iteration_file_2="$checkpoint_path/latest"
-iteration=0
-for (( node = 0; node <= num_node-1; node++ ))
-do
-    if $(ssh -q worker-"$node" "test -f \"$iteration_file\""); then
-        local_iteration=$(ssh -q worker-"$node" cat $iteration_file)
-        iteration=$(( ${local_iteration} > ${iteration} ? ${local_iteration} :  ${iteration} ))
-    fi
-done
-if [[ $iteration -gt 0 ]]; then
-    iteration_2="global_step${iteration}"
-    ds_ssh "echo $iteration > $iteration_file"
-    ds_ssh "echo $iteration_2 > $iteration_file_2"
-fi
+# iteration_file="$checkpoint_path/latest_checkpointed_iteration.txt"
+# iteration_file_2="$checkpoint_path/latest"
+# iteration=0
+# for (( node = 0; node <= num_node-1; node++ ))
+# do
+#     if $(ssh -q worker-"$node" "test -f \"$iteration_file\""); then
+#         local_iteration=$(ssh -q worker-"$node" cat $iteration_file)
+#         iteration=$(( ${local_iteration} > ${iteration} ? ${local_iteration} :  ${iteration} ))
+#     fi
+# done
+# if [[ $iteration -gt 0 ]]; then
+#     iteration_2="global_step${iteration}"
+#     ds_ssh "echo $iteration > $iteration_file"
+#     ds_ssh "echo $iteration_2 > $iteration_file_2"
+# fi
 JOB_ID=1010
 # HOST_NODE_ADDR="hkbugpusrv04"
 PORT=29764
@@ -843,4 +845,4 @@ HOST_NODE_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n 1)
 # fi
 
 # export CUDA_VISIBLE_DEVICES=2
-torchrun --nnodes=8 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR:$PORT --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
+torchrun --nnodes=64 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR:$PORT --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}

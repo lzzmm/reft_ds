@@ -114,6 +114,16 @@ elif [ $model_size_config -eq 8 ]; then
     lr=3.0e-4
     min_lr=1.0e-6
     init_std=0.009
+elif [ $model_size_config -eq 9 ] then
+    # 34B llama
+    model_size=34
+    num_layers=48
+    hidden_size=8192
+    num_attn_heads=64
+    global_batch_size=16
+    lr=3.0e-4
+    min_lr=1.0e-6
+    init_std=0.009
 fi
 
 # # GPT-3 Small 125M
@@ -234,7 +244,7 @@ lr_decay_style="cosine"
 ###############################################################################
 ### Parallelism configsf
 ## Model parallelism, 1 is no MP
-mp_size=2
+mp_size=8
 
 ## Pipeline parallelism. To disable PP, set pp_size to 1 and no_pp to true.
 ## Note that currently both curriculum learning and random-LTD are NOT
@@ -244,15 +254,15 @@ pp_size=2
 no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
-zero_stage=0
+zero_stage=1
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
-num_node=1
-num_gpus=8
+num_node=8
+num_gpus=64
 num_gpus_pernode=$(( ${num_gpus} / ${num_node} ))
 ## Data parallel size.
 # dp_size=$(( ${num_gpus} / ${pp_size} / ${mp_size} ))
-dp_size=2
+dp_size=4
 gradient_accumulation_steps=8
 ## Micro batch size per GPU
 ## Make sure that batch_size <= global_batch_size*pp_size*mp_size/num_gpus
@@ -819,24 +829,20 @@ if [[ $iteration -gt 0 ]]; then
     ds_ssh "echo $iteration > $iteration_file"
     ds_ssh "echo $iteration_2 > $iteration_file_2"
 fi
-# export NCCL_DEBUG=INFO
-# deepspeed ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} &>> ${log_path}/${current_time}_${jobname}_${host}.log
-# deepspeed --hostfile=hostfile --include=10.120.20.161:4,5,6,7@10.120.20.185:0,1,2,3  ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# JOB_ID=1010
-# HOST_NODE_ADDR=gpu1-19
-# echo "hostname: $(hostname)"
-# if [[ "$(hostname)" == "gpu1-19" ]]; then
-#     export CUDA_VISIBLE_DEVICES=0
-# elif [[ "$(hostname)" == "gpu1-23" ]]; then
+JOB_ID=1010
+# HOST_NODE_ADDR="hkbugpusrv04"
+PORT=29764
+echo "hostname: $(hostname)"
+HOST_NODE_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n 1)
+# echo "HOST_NODE_ADDR: $HOST_NODE_ADDR"
+# if [[ "$(hostname)" == "hkbugpusrv04" ]]; then
+#     export CUDA_VISIBLE_DEVICES=1
+# elif [[ "$(hostname)" == "hkbugpusrv05" ]]; then
 #     export CUDA_VISIBLE_DEVICES=1
 # else
 #     echo "Unknown node: $(hostname)"
 #     exit 1
+# fi
 
-# export CUDA_VISIBLE_DEVICES=4,5,6,7
-# torchrun --nnodes=2 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
-# deepspeed --include="localhost:6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-deepspeed --include="localhost:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-# deepspeed --hostfile=hostfile --include="gpu1-23:0,1,2,3,4,5,6,7@gpu1-28:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-# deepspeed --hostfile=hostfile --include="gpu1-23:0,1,2,3,4,5,6,7" ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options} 2>&1 | tee -a ${log_path}/${current_time}_${host}.log
-# rm -rf /dev/shm/reft
+# export CUDA_VISIBLE_DEVICES=2
+torchrun --nnodes=8 --rdzv-id=$JOB_ID --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR:$PORT --nproc-per-node=${num_gpus_pernode} ${dir}/../../../../pretrain_gpt.py ${megatron_options} ${data_options} ${deepspeed_options}
