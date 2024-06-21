@@ -116,6 +116,7 @@ from deepspeed.runtime.config import DtypeEnum
 import torch.distributed
 import psutil
 import multiprocessing
+from deepspeed.runtime.checkpoint_engine.async_checkpoint_engine import CPUAdamOptimizer
 
 
 MEMORY_OPT_ALLREDUCE_SIZE = 500000000
@@ -152,53 +153,53 @@ def split_half_float_double_sparse(tensors):
     return buckets
 
 
-class CPUAdamOptimizer:
-    def __init__(self, parameters, dp_rank, dp_size, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
-        self.lr = lr
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.eps = eps
-        self.m = {}
-        self.v = {}
-        self.param_fp32 = {}
-        self.t = 0
-        self.generated_grad = {}
+# class CPUAdamOptimizer:
+#     def __init__(self, parameters, dp_rank, dp_size, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
+#         self.lr = lr
+#         self.beta1 = beta1
+#         self.beta2 = beta2
+#         self.eps = eps
+#         self.m = {}
+#         self.v = {}
+#         self.param_fp32 = {}
+#         self.t = 0
+#         self.generated_grad = {}
         
-        for name, param in parameters:
-            stored_param = torch.tensor_split(param, dp_size, dim=0)[(dp_rank + 1) % dp_size]
-            self.m[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
-            self.v[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
-            self.generated_grad[name] = torch.randn_like(param, device="cpu", dtype=torch.float32)
-            # self.param_fp32[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
+#         for name, param in parameters:
+#             stored_param = torch.tensor_split(param, dp_size, dim=0)[(dp_rank + 1) % dp_size]
+#             self.m[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
+#             self.v[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
+#             self.generated_grad[name] = torch.randn_like(param, device="cpu", dtype=torch.float32)
+#             # self.param_fp32[param] = torch.zeros_like(param, device="cpu", dtype=torch.float32)
 
-    def step(self, cpu_grads, dp_rank, dp_size):
-        # nprint(f"Into step", "cyan")
-        # def is_cpu_available(cpu_id):
-        #     cpu_utilization = psutil.cpu_percent(interval=0.1, percpu=True)
-        #     return cpu_utilization[cpu_id] < 10
-        start_time = time.perf_counter()
-        # total_cpus = multiprocessing.cpu_count()
-        # available_cpu = None
-        # for cpu_id in range(total_cpus):
-        #     if is_cpu_available(cpu_id):
-        #         available_cpu = cpu_id
-        #         break
-        # p = psutil.Process()
-        # p.cpu_affinity(list(range(16,63)))
+#     def step(self, cpu_grads, dp_rank, dp_size):
+#         # nprint(f"Into step", "cyan")
+#         # def is_cpu_available(cpu_id):
+#         #     cpu_utilization = psutil.cpu_percent(interval=0.1, percpu=True)
+#         #     return cpu_utilization[cpu_id] < 10
+#         start_time = time.perf_counter()
+#         # total_cpus = multiprocessing.cpu_count()
+#         # available_cpu = None
+#         # for cpu_id in range(total_cpus):
+#         #     if is_cpu_available(cpu_id):
+#         #         available_cpu = cpu_id
+#         #         break
+#         # p = psutil.Process()
+#         # p.cpu_affinity(list(range(16,63)))
 
-        self.t += 1
+#         self.t += 1
         
-        for name, grad in cpu_grads.items():
-            grad = torch.tensor_split(grad, dp_size)[(dp_rank + 1) % dp_size]
-            self.m[name] = self.beta1 * self.m[name] + (1 - self.beta1) * grad
-            self.v[name] = self.beta2 * self.v[name] + (1 - self.beta2) * (grad ** 2)
+#         for name, grad in cpu_grads.items():
+#             grad = torch.tensor_split(grad, dp_size)[(dp_rank + 1) % dp_size]
+#             self.m[name] = self.beta1 * self.m[name] + (1 - self.beta1) * grad
+#             self.v[name] = self.beta2 * self.v[name] + (1 - self.beta2) * (grad ** 2)
             
-            # m_hat = self.m[param] / (1 - self.beta1 ** self.t)
-            # v_hat = self.v[param] / (1 - self.beta2 ** self.t)
+#             # m_hat = self.m[param] / (1 - self.beta1 ** self.t)
+#             # v_hat = self.v[param] / (1 - self.beta2 ** self.t)
             
-            # self.param_fp32[param] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
-        end_time = time.perf_counter()
-        nprint(f"dp_{global_config.data_parallel_rank} pp_{global_config.pipeline_parallel_rank} tp_{global_config.tensor_parallel_rank} CPUAdamOptimizer.step time: {end_time - start_time}", "cyan")
+#             # self.param_fp32[param] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
+#         end_time = time.perf_counter()
+#         nprint(f"dp_{global_config.data_parallel_rank} pp_{global_config.pipeline_parallel_rank} tp_{global_config.tensor_parallel_rank} CPUAdamOptimizer.step time: {end_time - start_time}", "cyan")
 
 class EngineTimers(object):
     r"""Wallclock timers for DeepSpeedEngine"""
@@ -431,7 +432,7 @@ class DeepSpeedEngine(Module):
         self.unflatten = _unflatten_dense_tensors
         
         # Get parameter names
-        self.cpu_optimizer = CPUAdamOptimizer(self.module.named_parameters(), dp_rank=self.ckpt_args_dict["data_parallel_rank"], dp_size=self.ckpt_args_dict["data_parallel_size"])
+        # self.cpu_optimizer = CPUAdamOptimizer(self.module.named_parameters(), dp_rank=self.ckpt_args_dict["data_parallel_rank"], dp_size=self.ckpt_args_dict["data_parallel_size"])
         
 
     def destroy(self):
@@ -3989,7 +3990,7 @@ class DeepSpeedEngine(Module):
         if self.global_rank == 0:
             self._copy_recovery_script(save_path)
         ckpt_type = 'zero' if self.zero_optimization() else 'bf16_zero'
-        logger.info(f'{ckpt_type} checkpoint saved {zero_checkpoint_name}')
+        # logger.info(f'{ckpt_type} checkpoint saved {zero_checkpoint_name}')
 
     def _zero3_consolidated_16bit_state_dict(self):
         """

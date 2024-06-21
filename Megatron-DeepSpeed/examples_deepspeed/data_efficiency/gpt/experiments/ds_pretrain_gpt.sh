@@ -244,7 +244,7 @@ pp_size=2
 no_pp="false"
 
 ## ZeRO-based data parallelism, stage=0 will disable ZeRO
-zero_stage=0
+zero_stage=1
 
 ## Total number of GPUs. ds_ssh is from DeepSpeed library.
 num_node=1
