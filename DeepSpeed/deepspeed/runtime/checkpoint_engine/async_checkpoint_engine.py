@@ -39,40 +39,37 @@ class CPUAdamOptimizer:
         self.generated_grad = {}
         self.total_tensors_size = 0
         
+        
         for name, param in model.named_parameters():
             if param.requires_grad:
                 stored_param = torch.tensor_split(param, dp_size, dim=0)[(dp_rank + 1) % dp_size]
-                self.m[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
-                self.v[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
+                self.m[name] = torch.empty_like(stored_param, device="cpu", dtype=torch.float32)
+                self.v[name] = torch.empty_like(stored_param, device="cpu", dtype=torch.float32)
                 self.total_tensors_size += (stored_param.numel() * stored_param.element_size() * 2)
             # self.generated_grad[name] = torch.randn_like(param, device="cpu", dtype=torch.float32)
-                self.param_fp32[name] = torch.zeros_like(stored_param, device="cpu", dtype=torch.float32)
+                self.param_fp32[name] = torch.empty_like(stored_param, device="cpu", dtype=torch.float32)
 
     def step(self, cpu_grads, dp_rank, dp_size):
-        # nprint(f"Into step", "cyan")
-        # def is_cpu_available(cpu_id):
-        #     cpu_utilization = psutil.cpu_percent(interval=0.1, percpu=True)
-        #     return cpu_utilization[cpu_id] < 10
-        # total_cpus = multiprocessing.cpu_count()
-        # available_cpu = None
-        # for cpu_id in range(total_cpus):
-        #     if is_cpu_available(cpu_id):
-        #         available_cpu = cpu_id
-        #         break
-        # p = psutil.Process()
-        # p.cpu_affinity(list(range(16,63)))
-
         self.t += 1
         
-        for name, grad in cpu_grads.items():
-            # grad = torch.tensor_split(grad, dp_size)[(dp_rank + 1) % dp_size]
-            self.m[name] = self.beta1 * self.m[name] + (1 - self.beta1) * grad
-            self.v[name] = self.beta2 * self.v[name] + (1 - self.beta2) * (grad ** 2)
-            
-            m_hat = self.m[name] / (1 - self.beta1 ** self.t)
-            v_hat = self.v[name] / (1 - self.beta2 ** self.t)
-            
-            self.param_fp32[name] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
+        with torch.no_grad():
+            for name, grad in cpu_grads.items():
+                # grad = torch.tensor_split(grad, dp_size)[(dp_rank + 1) % dp_size]
+                # self.m[name] = self.beta1 * self.m[name] + (1 - self.beta1) * grad
+                # self.v[name] = self.beta2 * self.v[name] + (1 - self.beta2) * (grad ** 2)
+                
+                # m_hat = self.m[name] / (1 - self.beta1 ** self.t)
+                # v_hat = self.v[name] / (1 - self.beta2 ** self.t)
+                
+                # self.param_fp32[name] -= self.lr * m_hat / (torch.sqrt(v_hat) + self.eps)
+                self.m[name].mul_(self.beta1).add_(grad, alpha=(1 - self.beta1))
+                self.v[name].mul_(self.beta2).addcmul_(grad, grad, value=(1 - self.beta2))
+                
+                m_hat = self.m[name] / (1 - self.beta1 ** self.t)
+                v_hat = self.v[name] / (1 - self.beta2 ** self.t)
+                
+                self.param_fp32[name].addcdiv_(m_hat, v_hat.sqrt().add_(self.eps), value=-self.lr)
+
         # nprint(f"dp_{global_config.data_parallel_rank} pp_{global_config.pipeline_parallel_rank} tp_{global_config.tensor_parallel_rank} CPUAdamOptimizer.step time: {end_time - start_time}", "cyan")
    
 class AsyncCheckpointEngine(CheckpointEngine):
@@ -103,6 +100,7 @@ class AsyncCheckpointEngine(CheckpointEngine):
         self.bubble_snapshot_time = 0
         self.grad_buffer = {}
         self.cpu_optimizer_stream = torch.cuda.Stream(torch.cuda.current_device())
+        self.cpu_optimizer = None
 
         
     def init_grad_buffer(self, model, ckpt_args_dict):
@@ -125,24 +123,24 @@ class AsyncCheckpointEngine(CheckpointEngine):
             cpu_optimizer_step_thread.start()
         
     def cpu_optimizer_step_thread(self, model, ckpt_args_dict):
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-        start_event.record()
+        # start_event = torch.cuda.Event(enable_timing=True)
+        # end_event = torch.cuda.Event(enable_timing=True)
+        # start_event.record()
         dp_rank = ckpt_args_dict["data_parallel_rank"]
         dp_size = ckpt_args_dict["data_parallel_size"]
         named_parameters = model.named_parameters()
         for name, param in named_parameters:
             if param.requires_grad:
-                grad = param.grad
-                record_grad = torch.tensor_split(grad, dp_size)[(dp_rank + 1) % dp_size]
+                # grad = param.grad
+                record_grad = torch.tensor_split(param, dp_size)[(dp_rank + 1) % dp_size]
                 self.grad_buffer[name].copy_(record_grad, non_blocking=True)
                 
         self.cpu_optimizer.step(self.grad_buffer, dp_rank, dp_size)
-        end_event.record()
-        if ckpt_args_dict['enable_test_snapshot_time']:
-            torch.cuda.synchronize()
-            elapsed_time = start_event.elapsed_time(end_event) / 1000
-            nprint(f"dp_{ckpt_args_dict['data_parallel_rank']} optimizer step time: {elapsed_time}, optimizer step speed: {self.cpu_optimizer.total_tensors_size / 1024 / 1024 / elapsed_time} MB/s", "magenta")
+        # end_event.record()
+        # if ckpt_args_dict['enable_test_snapshot_time']:
+        #     torch.cuda.synchronize()
+        #     elapsed_time = start_event.elapsed_time(end_event) / 1000
+        #     nprint(f"dp_{ckpt_args_dict['data_parallel_rank']} optimizer step time: {elapsed_time}, optimizer step speed: {self.cpu_optimizer.total_tensors_size / 1024 / 1024 / elapsed_time} MB/s", "magenta")
         
     def get_tensor_shard_cpu_buffer(self, tensor, chunk_num):
         # A tensor and chunk_num is sent inside, our target is to get the corresponding chunk of this tensor
